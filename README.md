@@ -1,0 +1,1 @@
+# takasan-stock-app
