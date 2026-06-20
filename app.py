@@ -35,23 +35,44 @@ MIN_FILL_RATE = 0.9
 # 1. JPX銘柄リスト取得
 # ==========================================
 @st.cache_data(ttl=86400) # 1日キャッシュ
-def get_jpx_tickers() -> list:
+def get_jpx_tickers() -> tuple[list, str]:
+    """
+    JPX銘柄リストを取得する。
+    戻り値: (tickers, diag) — diagには取得方法またはエラー内容を記録する。
+    """
     url = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
+    df = None
+    diag_steps = []
+
+    # ── 方法1: pandas.read_html（lxml/html5lib経由）──────────
     try:
         df = pd.read_html(url, header=0)[0]
-    except Exception:
+        diag_steps.append("read_html: 成功")
+    except Exception as e:
+        diag_steps.append(f"read_html: 失敗 ({type(e).__name__}: {e})")
+
+    # ── 方法2: requests + read_excel ─────────────────────────
+    if df is None:
         try:
             import requests, urllib3
             from io import BytesIO
             urllib3.disable_warnings()
-            r = requests.get(url, verify=False, timeout=30)
+            headers = {"User-Agent": "Mozilla/5.0"}
+            r = requests.get(url, verify=False, timeout=30, headers=headers)
+            r.raise_for_status()
             df = pd.read_excel(BytesIO(r.content), header=0)
-        except Exception:
-            # フォールバック
-            return [f"{c}.T" for c in [
-                7203,6758,9984,8035,4063,8306,9432,6861,6920,4502,
-                6954,9022,8411,5401,4519,6971,6902,7751,7267,9020,
-            ]]
+            diag_steps.append("requests+read_excel: 成功")
+        except Exception as e:
+            diag_steps.append(f"requests+read_excel: 失敗 ({type(e).__name__}: {e})")
+
+    # ── 両方失敗 → フォールバック ─────────────────────────────
+    if df is None:
+        diag = " | ".join(diag_steps)
+        fallback = [f"{c}.T" for c in [
+            7203,6758,9984,8035,4063,8306,9432,6861,6920,4502,
+            6954,9022,8411,5401,4519,6971,6902,7751,7267,9020,
+        ]]
+        return fallback, f"⚠️ JPX一覧の取得に失敗したためフォールバック(20銘柄)を使用: {diag}"
 
     def norm(c):
         try: return str(int(float(c)))
@@ -60,14 +81,20 @@ def get_jpx_tickers() -> list:
     mc = next((c for c in df.columns if "市場" in str(c) or "区分" in str(c)), None)
     cc = next((c for c in df.columns if "コード" in str(c) or "証券" in str(c)), None)
     if mc and cc:
-        df = df[df[mc].str.contains("プライム|スタンダード", na=False)]
-        codes = df[cc].dropna().astype(str).str.strip().map(norm)
+        df_f = df[df[mc].str.contains("プライム|スタンダード", na=False)]
+        codes = df_f[cc].dropna().astype(str).str.strip().map(norm)
     else:
         cc = next((c for c in df.columns if "コード" in str(c)), df.columns[0])
         codes = df[cc].dropna().astype(str).str.strip().map(norm)
 
     tickers = [f"{c}.T" for c in codes if 4 <= len(c) <= 5 and c.isalnum()]
-    return tickers
+
+    if len(tickers) < 100:
+        # 列が見つからず正しく絞り込めなかった可能性
+        diag = " | ".join(diag_steps) + f" | 抽出後{len(tickers)}件のみ（列構造を確認してください: {list(df.columns)[:8]}）"
+        return tickers, f"⚠️ 取得銘柄数が少なすぎます: {diag}"
+
+    return tickers, " | ".join(diag_steps) + f" | 取得成功: {len(tickers)}銘柄"
 
 # ==========================================
 # 2. データ取得（リトライ対応版）
@@ -422,7 +449,17 @@ with st.sidebar:
     start_button = st.button("🚀 スキャン開始", use_container_width=True)
 
 if start_button:
-    tickers_all = get_jpx_tickers()
+    tickers_all, jpx_diag = get_jpx_tickers()
+
+    # JPX取得の診断結果を表示（成功時は控えめ、失敗時は警告で目立たせる）
+    if "失敗" in jpx_diag or "⚠️" in jpx_diag:
+        st.error(f"JPX銘柄リスト取得の診断: {jpx_diag}")
+        if st.button("🔄 キャッシュをクリアして再取得"):
+            get_jpx_tickers.clear()
+            st.rerun()
+    else:
+        st.caption(f"JPX銘柄リスト取得の診断: {jpx_diag}")
+
     tickers = tickers_all if SCAN_LIMIT is None else tickers_all[:SCAN_LIMIT]
     batches = [tickers[i:i+BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
     total = len(batches)
