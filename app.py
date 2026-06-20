@@ -397,19 +397,44 @@ with st.sidebar:
     st.header("⚙️ フィルター設定")
     min_avg_turnover_oku = st.number_input("最低 平均売買代金 (億円/日)", value=3.0, step=1.0)
     min_market_cap_oku   = st.number_input("最低 時価総額 (億円)", value=500.0, step=100.0)
-    
+
     MIN_AVG_TURNOVER = min_avg_turnover_oku * 100_000_000
     MIN_MARKET_CAP   = min_market_cap_oku * 100_000_000
-    
+
+    st.markdown("---")
+    st.header("🎯 スキャン対象")
+    scan_mode = st.radio(
+        "対象銘柄数",
+        ["お試し（先頭50銘柄）", "中規模（先頭500銘柄）", "全銘柄（約3700銘柄・低速）"],
+        index=0,
+        help="Streamlit Cloudの無料枠はCPU/実行時間に制限があります。"
+             "全銘柄スキャンは1〜2時間かかり、タイムアウトする可能性が高いです。"
+             "まずは「お試し」で動作確認することを推奨します。"
+    )
+    if scan_mode.startswith("お試し"):
+        SCAN_LIMIT = 50
+    elif scan_mode.startswith("中規模"):
+        SCAN_LIMIT = 500
+    else:
+        SCAN_LIMIT = None  # 全銘柄
+
     st.markdown("---")
     start_button = st.button("🚀 スキャン開始", use_container_width=True)
 
 if start_button:
-    tickers = get_jpx_tickers()
+    tickers_all = get_jpx_tickers()
+    tickers = tickers_all if SCAN_LIMIT is None else tickers_all[:SCAN_LIMIT]
     batches = [tickers[i:i+BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
     total = len(batches)
-    
-    st.info(f"スキャン対象: {len(tickers)} 銘柄 / {total} バッチ")
+
+    st.info(f"取得した全銘柄: {len(tickers_all)} 銘柄 / 今回のスキャン対象: {len(tickers)} 銘柄 / {total} バッチ")
+    if SCAN_LIMIT is not None and SCAN_LIMIT < len(tickers_all):
+        st.warning(
+            f"⚠️ 「{scan_mode}」が選択されているため、{len(tickers_all)}銘柄のうち"
+            f"先頭{SCAN_LIMIT}銘柄のみをスキャンします。"
+            "全銘柄を対象にしたい場合はサイドバーで「全銘柄」を選んでください"
+            "（Streamlit Cloud無料枠ではタイムアウトしやすい点に注意）。"
+        )
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -495,6 +520,10 @@ if start_button:
     
     el = time.time() - t0
     status_text.success(f"✅ スキャン完了 ({el/60:.1f}分)")
+    st.caption(
+        f"対象 {len(tickers)} 銘柄中、週足パターンA: {len(all_a)} 件 / "
+        f"日足B1: {len(all_b1)} 件 / 日足B2: {len(all_b2)} 件 が合致しました。"
+    )
     
     # タブで結果表示
     tabs = st.tabs(["⭐複数パターン合致", "週足パターンA", "日足B1 押し目待ち🟡", "日足B2 反発エントリー🚀"])
