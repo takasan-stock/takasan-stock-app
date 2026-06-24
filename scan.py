@@ -28,6 +28,13 @@ from google.oauth2.service_account import Credentials
 
 warnings.filterwarnings("ignore")
 
+# GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
+JST = datetime.timezone(datetime.timedelta(hours=9))
+
+def now_jst() -> datetime.datetime:
+    """現在時刻を日本時間(JST)で返す"""
+    return datetime.datetime.now(JST)
+
 # ==========================================
 # 設定パラメータ
 # ==========================================
@@ -505,7 +512,7 @@ def write_df_to_sheet(gc: gspread.Client, spreadsheet_id: str,
 # 7. メイン処理
 # ==========================================
 def main():
-    print(f"=== スキャン開始: {datetime.datetime.now()} ===")
+    print(f"=== スキャン開始: {now_jst().strftime('%Y-%m-%d %H:%M:%S')} (JST) ===")
 
     tickers_all, jpx_diag = get_jpx_tickers()
     print(f"JPX取得診断: {jpx_diag}")
@@ -564,7 +571,7 @@ def main():
 
     # ── メタ情報シート（最終実行日時など）も書いておく ──
     meta_df = pd.DataFrame([{
-        "最終実行日時": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "最終実行日時": now_jst().strftime("%Y-%m-%d %H:%M:%S") + " (JST)",
         "対象銘柄数": len(tickers_all),
         "週足A件数": len(dfa),
         "日足B1件数": len(dfb1),
