@@ -688,9 +688,15 @@ def load_history(gc: gspread.Client, spreadsheet_id: str) -> pd.DataFrame:
         return pd.DataFrame(columns=["日付", "Ticker", "パターン"])
 
     df = pd.DataFrame(values[1:], columns=values[0])
-    if "日付" in df.columns:
-        df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
-        df = df.dropna(subset=["日付"])
+
+    # シート構造が想定と異なる場合（過去の異常書き込みなど）は安全に空扱いにする
+    required_cols = {"日付", "Ticker", "パターン"}
+    if not required_cols.issubset(set(df.columns)):
+        print(f"⚠️ 履歴シートの列構造が想定外です: {list(df.columns)} → 履歴をリセットします")
+        return pd.DataFrame(columns=["日付", "Ticker", "パターン"])
+
+    df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
+    df = df.dropna(subset=["日付"])
     return df
 
 
@@ -745,8 +751,18 @@ def append_today_to_history(gc: gspread.Client, spreadsheet_id: str,
         ws.update([["日付", "Ticker", "パターン"]])
     else:
         out = history.copy()
-        out["日付"] = pd.to_datetime(out["日付"], errors="coerce")  # 念のため再度保証
-        out["日付"] = out["日付"].dt.strftime("%Y-%m-%d")
+        # .dt アクセサに依存せず、要素ごとに安全に文字列化する
+        # （型がdatetime64でなくても、各要素がTimestamp/strのどちらでも対応できる）
+        def _to_date_str(v):
+            try:
+                ts = pd.Timestamp(v)
+                if pd.isna(ts):
+                    return None
+                return ts.strftime("%Y-%m-%d")
+            except Exception:
+                return None
+        out["日付"] = out["日付"].apply(_to_date_str)
+        out = out.dropna(subset=["日付"])
         out = out.sort_values("日付")
         values = [out.columns.tolist()] + out.astype(str).values.tolist()
         ws.update(values)
@@ -783,7 +799,16 @@ def compute_history_stats(history: pd.DataFrame, today_str: str) -> pd.DataFrame
     last_dates = past.groupby("Ticker")["日付"].max().rename("前回抽出日")
 
     stats = pd.concat([last_dates, counts], axis=1).reset_index()
-    stats["前回抽出日"] = stats["前回抽出日"].dt.strftime("%Y-%m-%d")
+
+    def _to_date_str(v):
+        try:
+            ts = pd.Timestamp(v)
+            if pd.isna(ts):
+                return "-"
+            return ts.strftime("%Y-%m-%d")
+        except Exception:
+            return "-"
+    stats["前回抽出日"] = stats["前回抽出日"].apply(_to_date_str)
     return stats
 
 
