@@ -721,6 +721,11 @@ def append_today_to_history(gc: gspread.Client, spreadsheet_id: str,
         new_df["日付"] = pd.to_datetime(new_df["日付"])
         history = pd.concat([history, new_df], ignore_index=True)
 
+    # ── 型を明示的に統一（空DataFrameとの結合でobject型に戻ることがあるため）──
+    if not history.empty:
+        history["日付"] = pd.to_datetime(history["日付"], errors="coerce")
+        history = history.dropna(subset=["日付"])
+
     # ── 1年より古い履歴を削除 ──
     if not history.empty:
         cutoff = pd.Timestamp.now() - pd.Timedelta(days=HISTORY_RETENTION_DAYS)
@@ -740,6 +745,7 @@ def append_today_to_history(gc: gspread.Client, spreadsheet_id: str,
         ws.update([["日付", "Ticker", "パターン"]])
     else:
         out = history.copy()
+        out["日付"] = pd.to_datetime(out["日付"], errors="coerce")  # 念のため再度保証
         out["日付"] = out["日付"].dt.strftime("%Y-%m-%d")
         out = out.sort_values("日付")
         values = [out.columns.tolist()] + out.astype(str).values.tolist()
@@ -754,6 +760,13 @@ def compute_history_stats(history: pd.DataFrame, today_str: str) -> pd.DataFrame
     今日のヒットは集計対象から除く（「前回」なので今回より前の記録のみ見る）。
     戻り値: 列 [Ticker, 前回抽出日, 年間抽出回数]
     """
+    if history.empty:
+        return pd.DataFrame(columns=["Ticker", "前回抽出日", "年間抽出回数"])
+
+    # 念のため日付型を保証（呼び出し元で型が崩れていても安全に動くように）
+    history = history.copy()
+    history["日付"] = pd.to_datetime(history["日付"], errors="coerce")
+    history = history.dropna(subset=["日付"])
     if history.empty:
         return pd.DataFrame(columns=["Ticker", "前回抽出日", "年間抽出回数"])
 
