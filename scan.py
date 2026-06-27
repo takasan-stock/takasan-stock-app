@@ -68,7 +68,14 @@ C_MIN_BARS      = 60    # ボリバン判定に必要な最低本数
 # ==========================================
 # 1. JPX銘柄リスト取得
 # ==========================================
-def get_jpx_tickers() -> tuple[list, str]:
+def get_jpx_tickers() -> tuple[list, dict, str]:
+    """
+    JPX銘柄リストを取得する。
+    戻り値: (tickers, name_map, diag)
+      - tickers : Tickerのリスト（例: ["7203.T", ...]）
+      - name_map: {Ticker: 日本語銘柄名} の辞書（JPX一覧から取得した正式な日本語社名）
+      - diag    : 取得方法またはエラー内容
+    """
     url = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
     df = None
     diag_steps = []
@@ -98,7 +105,7 @@ def get_jpx_tickers() -> tuple[list, str]:
             7203,6758,9984,8035,4063,8306,9432,6861,6920,4502,
             6954,9022,8411,5401,4519,6971,6902,7751,7267,9020,
         ]]
-        return fallback, f"⚠️ JPX一覧の取得に失敗: {diag}"
+        return fallback, {}, f"⚠️ JPX一覧の取得に失敗: {diag}"
 
     def norm(c):
         try: return str(int(float(c)))
@@ -106,20 +113,30 @@ def get_jpx_tickers() -> tuple[list, str]:
 
     mc = next((c for c in df.columns if "市場" in str(c) or "区分" in str(c)), None)
     cc = next((c for c in df.columns if "コード" in str(c) or "証券" in str(c)), None)
+    nc = next((c for c in df.columns if "銘柄名" in str(c)), None)  # 日本語社名の列
+
     if mc and cc:
         df_f = df[df[mc].str.contains("プライム|スタンダード", na=False)]
-        codes = df_f[cc].dropna().astype(str).str.strip().map(norm)
     else:
+        df_f = df
         cc = next((c for c in df.columns if "コード" in str(c)), df.columns[0])
-        codes = df[cc].dropna().astype(str).str.strip().map(norm)
+
+    codes_raw = df_f[cc].dropna().astype(str).str.strip()
+    codes = codes_raw.map(norm)
+
+    name_map = {}
+    if nc:
+        for code_raw, code, name in zip(codes_raw, codes, df_f[nc].fillna("")):
+            if 4 <= len(code) <= 5 and code.isalnum():
+                name_map[f"{code}.T"] = str(name).strip()
 
     tickers = [f"{c}.T" for c in codes if 4 <= len(c) <= 5 and c.isalnum()]
 
     if len(tickers) < 100:
         diag = " | ".join(diag_steps) + f" | 抽出後{len(tickers)}件のみ"
-        return tickers, f"⚠️ 取得銘柄数が少なすぎます: {diag}"
+        return tickers, name_map, f"⚠️ 取得銘柄数が少なすぎます: {diag}"
 
-    return tickers, " | ".join(diag_steps) + f" | 取得成功: {len(tickers)}銘柄"
+    return tickers, name_map, " | ".join(diag_steps) + f" | 取得成功: {len(tickers)}銘柄"
 
 
 # ==========================================
@@ -463,7 +480,15 @@ def _fetch_fundamentals_one(ticker: str) -> dict:
         "per": per_val, "fwd_per": fwd_per_val, "name": name_val, "err": err,
     }
 
-def enrich_with_fundamentals(df: pd.DataFrame, max_workers: int = 4) -> pd.DataFrame:
+def enrich_with_fundamentals(df: pd.DataFrame, name_map: dict | None = None,
+                             max_workers: int = 4) -> pd.DataFrame:
+    """
+    銘柄名・売上CAGR・売上予想・PERを付与する。
+    銘柄名はまずJPX一覧の日本語社名(name_map)を優先し、
+    無ければyfinanceのinfoから取得した英語名にフォールバックする。
+    """
+    name_map = name_map or {}
+
     if df.empty:
         df["銘柄名"] = []
         df["売上5y CAGR"] = []
@@ -478,7 +503,15 @@ def enrich_with_fundamentals(df: pd.DataFrame, max_workers: int = 4) -> pd.DataF
         for fut in as_completed(futures):
             r = fut.result()
             results[r["ticker"]] = r
-    df["銘柄名"]      = df["Ticker"].map(lambda t: results.get(t, {}).get("name", "-"))
+
+    def get_name(t):
+        # JPX一覧の日本語社名を優先。無ければyfinance(英語名)にフォールバック
+        jp_name = name_map.get(t, "")
+        if jp_name:
+            return jp_name
+        return results.get(t, {}).get("name", "-")
+
+    df["銘柄名"]      = df["Ticker"].map(get_name)
     df["売上5y CAGR"] = df["Ticker"].map(lambda t: results.get(t, {}).get("cagr", "-"))
     df["売上予想"]   = df["Ticker"].map(lambda t: results.get(t, {}).get("est", "-"))
     df["PER"]        = df["Ticker"].map(lambda t: results.get(t, {}).get("per", "-"))
@@ -833,9 +866,13 @@ def attach_history_stats(df: pd.DataFrame, stats: pd.DataFrame) -> pd.DataFrame:
 # 7. メイン処理
 # ==========================================
 def main():
-    print(f"=== スキャン開始: {now_jst().strftime('%Y-%m-%d %H:%M:%S')} (JST) ===")
+    now = now_jst()
+    weekday_jp = ["月","火","水","木","金","土","日"][now.weekday()]
+    trigger = os.environ.get("GITHUB_EVENT_NAME", "不明（ローカル実行など）")
+    print(f"=== スキャン開始: {now.strftime('%Y-%m-%d %H:%M:%S')} ({weekday_jp}曜日, JST) "
+          f"| トリガー: {trigger} ===")
 
-    tickers_all, jpx_diag = get_jpx_tickers()
+    tickers_all, name_map, jpx_diag = get_jpx_tickers()
     print(f"JPX取得診断: {jpx_diag}")
     print(f"対象銘柄数: {len(tickers_all)}")
 
@@ -873,10 +910,10 @@ def main():
     dfc  = format_c(all_c)
 
     print("ファンダメンタルズ取得中...")
-    dfa  = enrich_with_fundamentals(dfa)
-    dfb1 = enrich_with_fundamentals(dfb1)
-    dfb2 = enrich_with_fundamentals(dfb2)
-    dfc  = enrich_with_fundamentals(dfc)
+    dfa  = enrich_with_fundamentals(dfa,  name_map)
+    dfb1 = enrich_with_fundamentals(dfb1, name_map)
+    dfb2 = enrich_with_fundamentals(dfb2, name_map)
+    dfc  = enrich_with_fundamentals(dfc,  name_map)
 
     dfm = build_multi_hit(dfa, dfb1, dfb2, dfc)
 
@@ -909,8 +946,11 @@ def main():
     write_df_to_sheet(gc, spreadsheet_id, "ボリバンCブレイク",   dfc)
 
     # ── メタ情報シート（最終実行日時など）も書いておく ──
+    end_now = now_jst()
+    weekday_jp_end = ["月","火","水","木","金","土","日"][end_now.weekday()]
     meta_df = pd.DataFrame([{
-        "最終実行日時": f"{today_str} {now_jst().strftime('%H:%M:%S')} (JST)",
+        "最終実行日時": f"{today_str} {end_now.strftime('%H:%M:%S')} ({weekday_jp_end}曜日, JST)",
+        "トリガー種別": os.environ.get("GITHUB_EVENT_NAME", "不明（ローカル実行など）"),
         "対象銘柄数": len(tickers_all),
         "週足A件数": len(dfa),
         "日足B1件数": len(dfb1),
