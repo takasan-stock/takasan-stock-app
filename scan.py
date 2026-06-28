@@ -111,15 +111,30 @@ def get_jpx_tickers() -> tuple[list, dict, str]:
         try: return str(int(float(c)))
         except: return str(c).strip()
 
-    mc = next((c for c in df.columns if "市場" in str(c) or "区分" in str(c)), None)
-    cc = next((c for c in df.columns if "コード" in str(c) or "証券" in str(c)), None)
-    nc = next((c for c in df.columns if "銘柄名" in str(c)), None)  # 日本語社名の列
+    def norm_colname(c):
+        """列名の表記ゆれ（全角/半角、前後空白、Unicode正規化差異）を吸収する"""
+        import unicodedata
+        s = str(c)
+        s = unicodedata.normalize("NFKC", s)
+        return s.strip()
+
+    norm_cols = {col: norm_colname(col) for col in df.columns}
+
+    mc = next((col for col, n in norm_cols.items() if "市場" in n or "区分" in n), None)
+    cc = next((col for col, n in norm_cols.items() if "コード" in n or "証券" in n), None)
+    nc = next((col for col, n in norm_cols.items() if "銘柄名" in n), None)
+
+    # ── 診断: 実際の列名（正規化前後）を出力（原因調査用）──
+    print("[診断] JPXデータの実際の列名一覧:")
+    for col in df.columns:
+        print(f"    repr={repr(col)}  正規化後={repr(norm_colname(col))}")
+    print(f"[診断] 市場列検出: {repr(mc)} / コード列検出: {repr(cc)} / 銘柄名列検出: {repr(nc)}")
 
     if mc and cc:
-        df_f = df[df[mc].str.contains("プライム|スタンダード", na=False)]
+        df_f = df[df[mc].astype(str).str.contains("プライム|スタンダード", na=False)]
     else:
         df_f = df
-        cc = next((c for c in df.columns if "コード" in str(c)), df.columns[0])
+        cc = cc or df.columns[0]
 
     codes_raw = df_f[cc].dropna().astype(str).str.strip()
     codes = codes_raw.map(norm)
@@ -129,14 +144,22 @@ def get_jpx_tickers() -> tuple[list, dict, str]:
         for code_raw, code, name in zip(codes_raw, codes, df_f[nc].fillna("")):
             if 4 <= len(code) <= 5 and code.isalnum():
                 name_map[f"{code}.T"] = str(name).strip()
+    else:
+        print("[診断] ⚠️ 銘柄名列が見つからなかったため name_map は空になります")
 
     tickers = [f"{c}.T" for c in codes if 4 <= len(c) <= 5 and c.isalnum()]
+
+    # ── 診断: name_mapの実際の中身を数件サンプル表示 ──
+    print(f"[診断] name_map件数: {len(name_map)}")
+    if name_map:
+        sample = list(name_map.items())[:3]
+        print(f"[診断] name_mapサンプル: {sample}")
 
     if len(tickers) < 100:
         diag = " | ".join(diag_steps) + f" | 抽出後{len(tickers)}件のみ"
         return tickers, name_map, f"⚠️ 取得銘柄数が少なすぎます: {diag}"
 
-    return tickers, name_map, " | ".join(diag_steps) + f" | 取得成功: {len(tickers)}銘柄"
+    return tickers, name_map, " | ".join(diag_steps) + f" | 取得成功: {len(tickers)}銘柄 | name_map: {len(name_map)}件"
 
 
 # ==========================================
