@@ -28,6 +28,10 @@ from google.oauth2.service_account import Credentials
 
 warnings.filterwarnings("ignore")
 
+# ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
+SCAN_PY_VERSION = "2026-06-27-v2-debug-fundamentals"
+print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
+
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
 JST = datetime.timezone(datetime.timedelta(hours=9))
 
@@ -125,10 +129,10 @@ def get_jpx_tickers() -> tuple[list, dict, str]:
     nc = next((col for col, n in norm_cols.items() if "銘柄名" in n), None)
 
     # ── 診断: 実際の列名（正規化前後）を出力（原因調査用）──
-    print("[診断] JPXデータの実際の列名一覧:")
+    print("[診断] JPXデータの実際の列名一覧:", flush=True)
     for col in df.columns:
-        print(f"    repr={repr(col)}  正規化後={repr(norm_colname(col))}")
-    print(f"[診断] 市場列検出: {repr(mc)} / コード列検出: {repr(cc)} / 銘柄名列検出: {repr(nc)}")
+        print(f"    repr={repr(col)}  正規化後={repr(norm_colname(col))}", flush=True)
+    print(f"[診断] 市場列検出: {repr(mc)} / コード列検出: {repr(cc)} / 銘柄名列検出: {repr(nc)}", flush=True)
 
     if mc and cc:
         df_f = df[df[mc].astype(str).str.contains("プライム|スタンダード", na=False)]
@@ -145,15 +149,15 @@ def get_jpx_tickers() -> tuple[list, dict, str]:
             if 4 <= len(code) <= 5 and code.isalnum():
                 name_map[f"{code}.T"] = str(name).strip()
     else:
-        print("[診断] ⚠️ 銘柄名列が見つからなかったため name_map は空になります")
+        print("[診断] ⚠️ 銘柄名列が見つからなかったため name_map は空になります", flush=True)
 
     tickers = [f"{c}.T" for c in codes if 4 <= len(c) <= 5 and c.isalnum()]
 
     # ── 診断: name_mapの実際の中身を数件サンプル表示 ──
-    print(f"[診断] name_map件数: {len(name_map)}")
+    print(f"[診断] name_map件数: {len(name_map)}", flush=True)
     if name_map:
         sample = list(name_map.items())[:3]
-        print(f"[診断] name_mapサンプル: {sample}")
+        print(f"[診断] name_mapサンプル: {sample}", flush=True)
 
     if len(tickers) < 100:
         diag = " | ".join(diag_steps) + f" | 抽出後{len(tickers)}件のみ"
@@ -539,12 +543,12 @@ def enrich_with_fundamentals(df: pd.DataFrame, name_map: dict | None = None,
     # ── 診断: 実際に何件JPX名がヒットしたか確認 ──
     hit_count = sum(1 for t in tickers if name_map.get(t, ""))
     print(f"[診断] enrich_with_fundamentals: 対象{len(tickers)}件中 "
-          f"name_mapヒット{hit_count}件 / name_map総数{len(name_map)}件")
+          f"name_mapヒット{hit_count}件 / name_map総数{len(name_map)}件", flush=True)
     if tickers:
         sample_t = tickers[0]
         print(f"[診断] サンプルTicker={repr(sample_t)} → "
               f"name_map.get結果={repr(name_map.get(sample_t))} → "
-              f"最終的な銘柄名={repr(get_name(sample_t))}")
+              f"最終的な銘柄名={repr(get_name(sample_t))}", flush=True)
 
     df["売上5y CAGR"] = df["Ticker"].map(lambda t: results.get(t, {}).get("cagr", "-"))
     df["売上予想"]   = df["Ticker"].map(lambda t: results.get(t, {}).get("est", "-"))
@@ -759,7 +763,7 @@ def load_history(gc: gspread.Client, spreadsheet_id: str) -> pd.DataFrame:
     # シート構造が想定と異なる場合（過去の異常書き込みなど）は安全に空扱いにする
     required_cols = {"日付", "Ticker", "パターン"}
     if not required_cols.issubset(set(df.columns)):
-        print(f"⚠️ 履歴シートの列構造が想定外です: {list(df.columns)} → 履歴をリセットします")
+        print(f"⚠️ 履歴シートの列構造が想定外です: {list(df.columns)} → 履歴をリセットします", flush=True)
         return pd.DataFrame(columns=["日付", "Ticker", "パターン"])
 
     df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
@@ -904,15 +908,15 @@ def main():
     weekday_jp = ["月","火","水","木","金","土","日"][now.weekday()]
     trigger = os.environ.get("GITHUB_EVENT_NAME", "不明（ローカル実行など）")
     print(f"=== スキャン開始: {now.strftime('%Y-%m-%d %H:%M:%S')} ({weekday_jp}曜日, JST) "
-          f"| トリガー: {trigger} ===")
+          f"| トリガー: {trigger} ===", flush=True)
 
     tickers_all, name_map, jpx_diag = get_jpx_tickers()
-    print(f"JPX取得診断: {jpx_diag}")
-    print(f"対象銘柄数: {len(tickers_all)}")
+    print(f"JPX取得診断: {jpx_diag}", flush=True)
+    print(f"対象銘柄数: {len(tickers_all)}", flush=True)
 
     batches = [tickers_all[i:i+BATCH_SIZE] for i in range(0, len(tickers_all), BATCH_SIZE)]
     total = len(batches)
-    print(f"バッチ数: {total}")
+    print(f"バッチ数: {total}", flush=True)
 
     all_a, all_b1, all_b2, all_c = [], [], [], []
     ctr = {}
@@ -927,23 +931,23 @@ def main():
                 ra, rb1, rb2, rc = future.result()
                 all_a.extend(ra); all_b1.extend(rb1); all_b2.extend(rb2); all_c.extend(rc)
             except Exception as e:
-                print(f"バッチエラー: {e}")
+                print(f"バッチエラー: {e}", flush=True)
             completed += 1
             if completed % 10 == 0 or completed == total:
                 elapsed = time.time() - t0
-                print(f"  進捗 {completed}/{total} バッチ完了 ({elapsed/60:.1f}分経過)")
+                print(f"  進捗 {completed}/{total} バッチ完了 ({elapsed/60:.1f}分経過)", flush=True)
             time.sleep(SLEEP_SEC)
 
     elapsed = time.time() - t0
-    print(f"=== スキャン完了 ({elapsed/60:.1f}分) ===")
-    print(f"週足A: {len(all_a)}件 / 日足B1: {len(all_b1)}件 / 日足B2: {len(all_b2)}件 / ボリバンC: {len(all_c)}件")
+    print(f"=== スキャン完了 ({elapsed/60:.1f}分) ===", flush=True)
+    print(f"週足A: {len(all_a)}件 / 日足B1: {len(all_b1)}件 / 日足B2: {len(all_b2)}件 / ボリバンC: {len(all_c)}件", flush=True)
 
     dfa  = format_a(all_a)
     dfb1 = format_b1(all_b1)
     dfb2 = format_b2(all_b2)
     dfc  = format_c(all_c)
 
-    print("ファンダメンタルズ取得中...")
+    print("ファンダメンタルズ取得中...", flush=True)
     dfa  = enrich_with_fundamentals(dfa,  name_map)
     dfb1 = enrich_with_fundamentals(dfb1, name_map)
     dfb2 = enrich_with_fundamentals(dfb2, name_map)
@@ -960,7 +964,7 @@ def main():
     today_str = now_jst().strftime("%Y-%m-%d")
 
     # ── 履歴に今回のヒットを追記し、1年より古い記録を削除 ──
-    print("抽出履歴を更新中...")
+    print("抽出履歴を更新中...", flush=True)
     history = append_today_to_history(gc, spreadsheet_id, today_str, dfa, dfb1, dfb2, dfc)
     stats = compute_history_stats(history, today_str)
 
@@ -972,7 +976,7 @@ def main():
     if not dfm.empty:
         dfm = attach_history_stats(dfm, stats)
 
-    print("Googleスプレッドシートへ書き込み中...")
+    print("Googleスプレッドシートへ書き込み中...", flush=True)
     write_df_to_sheet(gc, spreadsheet_id, "複数パターン合致", dfm)
     write_df_to_sheet(gc, spreadsheet_id, "週足パターンA",     dfa)
     write_df_to_sheet(gc, spreadsheet_id, "日足B1押し目待ち",   dfb1)
@@ -996,7 +1000,7 @@ def main():
     }])
     write_df_to_sheet(gc, spreadsheet_id, "実行ログ", meta_df)
 
-    print("=== 完了 ===")
+    print("=== 完了 ===", flush=True)
 
 
 if __name__ == "__main__":
