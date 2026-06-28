@@ -535,6 +535,17 @@ def enrich_with_fundamentals(df: pd.DataFrame, name_map: dict | None = None,
         return results.get(t, {}).get("name", "-")
 
     df["銘柄名"]      = df["Ticker"].map(get_name)
+
+    # ── 診断: 実際に何件JPX名がヒットしたか確認 ──
+    hit_count = sum(1 for t in tickers if name_map.get(t, ""))
+    print(f"[診断] enrich_with_fundamentals: 対象{len(tickers)}件中 "
+          f"name_mapヒット{hit_count}件 / name_map総数{len(name_map)}件")
+    if tickers:
+        sample_t = tickers[0]
+        print(f"[診断] サンプルTicker={repr(sample_t)} → "
+              f"name_map.get結果={repr(name_map.get(sample_t))} → "
+              f"最終的な銘柄名={repr(get_name(sample_t))}")
+
     df["売上5y CAGR"] = df["Ticker"].map(lambda t: results.get(t, {}).get("cagr", "-"))
     df["売上予想"]   = df["Ticker"].map(lambda t: results.get(t, {}).get("est", "-"))
     df["PER"]        = df["Ticker"].map(lambda t: results.get(t, {}).get("per", "-"))
