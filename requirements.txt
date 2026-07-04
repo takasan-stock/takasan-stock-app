@@ -1,4 +1,11 @@
 streamlit
+yfinance
 pandas
-gspread
-google-auth
+numpy
+requests
+lxml
+html5lib
+beautifulsoup4
+openpyxl
+xlrd
+plotly
