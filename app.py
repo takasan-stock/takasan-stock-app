@@ -23,10 +23,6 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
-# --- 追加 ---
-import yfinance as yf
-import plotly.graph_objects as go
-
 st.set_page_config(page_title="日本株スクリーナー結果ビューア", layout="wide")
 
 # ==========================================
@@ -43,66 +39,56 @@ def get_gspread_client():
     )
     return gspread.authorize(creds)
 
+
 @st.cache_data(ttl=300)  # 5分キャッシュ（毎回API呼ばないように）
 def load_sheet(sheet_name: str) -> pd.DataFrame:
     gc = get_gspread_client()
-    spreadsheet_id = st.secrets["SPREADSHEET_ID"]
+    sh = gc.open_by_key(st.secrets["SPREADSHEET_ID"])
     try:
-        sheet = gc.open_by_key(spreadsheet_id).worksheet(sheet_name)
-        data = sheet.get_all_values()
-        if not data:
-            return pd.DataFrame()
-        df = pd.DataFrame(data[1:], columns=data[0])
-        return df
-    except Exception as e:
-        st.error(f"シート '{sheet_name}' の読み込みエラー: {e}")
+        ws = sh.worksheet(sheet_name)
+    except gspread.WorksheetNotFound:
         return pd.DataFrame()
 
-# ==========================================
-# チャート描画関数（追加）
-# ==========================================
-def draw_chart(ticker_code, ticker_name=""):
-    try:
-        # 日本株の場合はコードの末尾に .T をつける
-        symbol = f"{ticker_code}.T"
-        # 過去半年分のデータを取得
-        df_chart = yf.download(symbol, period="6mo", progress=False)
-        
-        if df_chart.empty:
-            st.warning(f"【{ticker_code}】の株価データが取得できませんでした。")
-            return
-            
-        fig = go.Figure(data=[go.Candlestick(
-            x=df_chart.index,
-            open=df_chart['Open'],
-            high=df_chart['High'],
-            low=df_chart['Low'],
-            close=df_chart['Close'],
-            name="ローソク足"
-        )])
-        
-        # 25日SMAも追加（トレンド把握用）
-        sma25 = df_chart['Close'].rolling(window=25).mean()
-        fig.add_trace(go.Scatter(x=df_chart.index, y=sma25, mode='lines', name='25SMA', line=dict(color='orange', width=1.5)))
-        
-        fig.update_layout(
-            title=f"【{ticker_code}】{ticker_name} (過去半年)",
-            yaxis_title="株価",
-            xaxis_rangeslider_visible=False,
-            height=450,
-            margin=dict(l=0, r=0, t=40, b=0)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-    except Exception as e:
-        st.error(f"チャート描画エラー: {e}")
+    values = ws.get_all_values()
+    if not values or len(values) < 2:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(values[1:], columns=values[0])
+    return df
+
 
 # ==========================================
-# メイン画面表示
+# UI
 # ==========================================
-st.title("📊 日本株スクリーナー結果ビューア")
+st.title("📈 日本株スクリーナー 結果ビューア")
+st.caption(
+    "このアプリはスキャン処理を行いません。"
+    "GitHub Actionsが毎営業日に自動実行した結果をスプレッドシートから表示しています。"
+)
 
-tabs = st.tabs(["複数パターン合致", "週足パターンA", "日足B1 押し目待ち🟡", "日足B2 反発エントリー🚀", "ボリバンC ブレイク💥"])
+col1, col2 = st.columns([3, 1])
+with col2:
+    if st.button("🔄 最新の結果を再取得", use_container_width=True):
+        load_sheet.clear()
+        st.rerun()
+
+# ── 実行ログ（最終更新日時）を表示 ──
+log_df = load_sheet("実行ログ")
+if not log_df.empty:
+    last_row = log_df.iloc[-1]
+    st.info(
+        f"最終スキャン日時: {last_row.get('最終実行日時', '不明')}　|　"
+        f"対象銘柄数: {last_row.get('対象銘柄数', '-')}　|　"
+        f"週A: {last_row.get('週足A件数','-')}件　"
+        f"B1: {last_row.get('日足B1件数','-')}件　"
+        f"B2: {last_row.get('日足B2件数','-')}件　"
+        f"ボリバンC: {last_row.get('ボリバンC件数','-')}件"
+    )
+else:
+    st.warning("実行ログが見つかりません。GitHub Actionsがまだ一度も実行されていない可能性があります。")
+
+# ── 各シートをタブ表示 ──
+tabs = st.tabs(["⭐複数パターン合致", "週足パターンA", "日足B1 押し目待ち🟡", "日足B2 反発エントリー🚀", "ボリバンC ブレイク💥"])
 
 sheet_map = [
     (tabs[0], "複数パターン合致",      "複数パターン合致"),
@@ -116,46 +102,29 @@ for tab, title, sheet_name in sheet_map:
     with tab:
         df = load_sheet(sheet_name)
         st.subheader(f"{title} (該当: {len(df)} 銘柄)")
-        
         if not df.empty and "該当銘柄なし" not in df.columns:
-            
-            # --- 左右に分割：左(比率1.5)に表、右(比率1.0)にチャート ---
-            col1, col2 = st.columns([1.5, 1.0])
-            
-            with col1:
-                # 既存のデータフレームハイライト処理
-                if "合致パターン数" in df.columns:
-                    try:
-                        df["合致パターン数"] = pd.to_numeric(df["合致パターン数"], errors="coerce")
-                    except Exception:
-                        pass
-                    st.dataframe(
-                        df.style.apply(
-                            lambda x: ['background-color: #ffeeb0' if str(x.get('合致パターン数','')) and float(x.get('合致パターン数',0) or 0) >= 2 else '' for _ in x],
-                            axis=1
-                        ),
-                        height=450 # チャートの高さと合わせる
-                    )
-                else:
-                    st.dataframe(df, height=450)
-            
-            with col2:
-                # 表に「コード」列がある場合のみプルダウンを表示
-                if "コード" in df.columns:
-                    # プルダウンの選択肢を作成 (例: "7203 : トヨタ自動車")
-                    options = []
-                    for _, row in df.iterrows():
-                        code = str(row.get("コード", ""))
-                        name = str(row.get("銘柄名", ""))
-                        options.append(f"{code} : {name}")
-                    
-                    # ユーザーがプルダウンから銘柄を選択
-                    selected = st.selectbox("📊 チャートを表示する銘柄を選択", options, key=f"sb_{sheet_name}")
-                    
-                    if selected:
-                        # "7203 : トヨタ自動車" からコードと銘柄名を分割して取得
-                        selected_code = selected.split(" : ")[0]
-                        selected_name = selected.split(" : ")[1] if " : " in selected else ""
-                        
-                        # チャートを描画
-                        draw_chart(selected_code, selected_name)
+            if "合致パターン数" in df.columns:
+                # 合致パターン数が文字列のままなので数値化してハイライト判定
+                try:
+                    df["合致パターン数"] = pd.to_numeric(df["合致パターン数"], errors="coerce")
+                except Exception:
+                    pass
+                st.dataframe(
+                    df.style.apply(
+                        lambda x: ['background-color: #ffeeb0' if str(x.get('合致パターン数','')) and float(x.get('合致パターン数',0) or 0) >= 2 else '' for _ in x],
+                        axis=1
+                    ),
+                    use_container_width=True,
+                )
+            else:
+                st.dataframe(df, use_container_width=True)
+
+            csv = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            st.download_button(
+                label=f"📥 {sheet_name} をダウンロード",
+                data=csv,
+                file_name=f"{sheet_name}.csv",
+                mime="text/csv",
+            )
+        else:
+            st.write("該当銘柄なし")
