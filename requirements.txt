@@ -1,12 +1,6 @@
 streamlit
-yfinance
 pandas
-numpy
-requests
-lxml
-html5lib
-beautifulsoup4
-openpyxl
-xlrd
 gspread
 google-auth
+yfinance
+plotly
