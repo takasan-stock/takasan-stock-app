@@ -355,13 +355,14 @@ if not log_df.empty:
                f"対象 {last.get('対象銘柄数', '-')} 銘柄　|　"
                f"トリガー: {last.get('トリガー種別', '-')}")
 
-    m = st.columns(6)
+    m = st.columns(7)
     m[0].metric("⭐ 複数合致",  last.get("複数合致件数", "-"))
     m[1].metric("週足A",        last.get("週足A件数", "-"))
     m[2].metric("日足B1 押し目", last.get("日足B1件数", "-"))
     m[3].metric("日足B2 反発",   last.get("日足B2件数", "-"))
     m[4].metric("ボリバンC",     last.get("ボリバンC件数", "-"))
     m[5].metric("初押しD",       last.get("初押しD件数", "-"))
+    m[6].metric("出来高E",       last.get("出来高E件数", "-"))
 else:
     st.warning("実行ログが見つかりません。GitHub Actionsがまだ一度も実行されていない可能性があります。")
 
@@ -377,6 +378,7 @@ tabs = st.tabs([
     "B2 反発🚀",
     "ボリバンC💥",
     "初押しD🎯",
+    "出来高E📢",
     "📊 チャート",
 ])
 
@@ -387,6 +389,7 @@ sheet_map = [
     (tabs[3], "日足B2 反発エントリー",         "日足B2反発エントリー"),
     (tabs[4], "ボリンジャーバンド +2σ ブレイク", "ボリバンCブレイク"),
     (tabs[5], "初押し・SMA25タッチ 下ひげ陽線", "初押しD下ひげ陽線"),
+    (tabs[6], "揉み合い後の出来高急増ブレイク",   "出来高E急増ブレイク"),
 ]
 
 for tab, title, sheet_name in sheet_map:
@@ -396,7 +399,7 @@ for tab, title, sheet_name in sheet_map:
 # ==========================================
 # チャートタブ
 # ==========================================
-with tabs[6]:
+with tabs[7]:
     left_col, right_col = st.columns([1, 3])
 
     with left_col:
@@ -409,6 +412,7 @@ with tabs[6]:
             "日足B2 反発エントリー": "日足B2反発エントリー",
             "ボリバンC ブレイク":  "ボリバンCブレイク",
             "初押しD 下ひげ陽線":  "初押しD下ひげ陽線",
+            "出来高E 急増ブレイク": "出来高E急増ブレイク",
         }
         selected_source = st.selectbox(
             "表示するリスト",
