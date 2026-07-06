@@ -253,8 +253,8 @@ def build_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
     fig.add_trace(go.Candlestick(
         x=df.index, open=df["Open"], high=df["High"],
         low=df["Low"], close=df["Close"], name="ローソク足",
-        increasing_line_color="#E94747", decreasing_line_color="#1B75BB",
-        increasing_fillcolor="#E94747", decreasing_fillcolor="#1B75BB",
+        increasing_line_color="#1B75BB", decreasing_line_color="#E94747",
+        increasing_fillcolor="#1B75BB", decreasing_fillcolor="#E94747",
     ), row=1, col=1)
 
     fig.add_trace(go.Scatter(
@@ -294,7 +294,7 @@ def build_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
             line=dict(color=color, width=width), name=col_name,
         ), row=1, col=1)
 
-    colors = ["#E94747" if r["Close"] >= r["Open"] else "#1B75BB"
+    colors = ["#1B75BB" if r["Close"] >= r["Open"] else "#E94747"
               for _, r in df.iterrows()]
     fig.add_trace(go.Bar(
         x=df.index, y=df["Volume"], name="出来高",
