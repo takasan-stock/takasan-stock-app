@@ -153,15 +153,82 @@ NUMERIC_HINTS = [
 ]
 
 def to_display_df(df: pd.DataFrame) -> pd.DataFrame:
-    """数値らしい列を数値化して表示用に整える"""
+    """数値らしい列を数値化し、小数点の表示桁数も列の意味に応じて整える"""
     out = df.copy()
+
+    # 判定は「率・比率っぽい列」を先にチェックしてから「価格・件数っぽい列」を見る。
+    # 例: "50BAND上限距離%" は "BAND" を含むが、実際は%表記の距離なので
+    #     先に "%" や "距離" にヒットさせて2桁小数にする必要がある。
+    TWO_DECIMAL_HINTS = ["%", "距離", "傾き", "乖離", "騰落率"]
+    ONE_DECIMAL_HINTS = ["RSI", "倍率", "比"]
+    INT_HINTS = [
+        "終値", "始値", "高値", "安値", "MA", "BAND", "σ",
+        "売買代金", "時価総額", "出来高", "日数", "件数",
+        "回数", "件", "パターン数",
+    ]
+
     for col in out.columns:
-        if any(h in col for h in NUMERIC_HINTS):
-            converted = pd.to_numeric(out[col], errors="coerce")
-            # 半分以上が数値化できた列だけ置き換える（"-"混在の列を守る）
-            if converted.notna().sum() >= len(out) * 0.5:
-                out[col] = converted
+        if not any(h in col for h in NUMERIC_HINTS):
+            continue
+        converted = pd.to_numeric(out[col], errors="coerce")
+        # 半分以上が数値化できた列だけ置き換える（"-"混在の列を守る）
+        if converted.notna().sum() < len(out) * 0.5:
+            continue
+
+        if any(h in col for h in TWO_DECIMAL_HINTS):
+            out[col] = converted.round(2)
+        elif any(h in col for h in ONE_DECIMAL_HINTS):
+            out[col] = converted.round(1)
+        elif any(h in col for h in INT_HINTS):
+            out[col] = converted.round(0)
+        else:
+            out[col] = converted.round(2)
+
     return out
+
+
+def get_format_map(df: pd.DataFrame) -> dict:
+    """列名の意味に応じて、Styler.format用のフォーマット辞書を作る（to_display_dfと同じ優先順位）"""
+    TWO_DECIMAL_HINTS = ["%", "距離", "傾き", "乖離", "騰落率"]
+    ONE_DECIMAL_HINTS = ["RSI", "倍率", "比"]
+    INT_HINTS = [
+        "終値", "始値", "高値", "安値", "MA", "BAND", "σ",
+        "売買代金", "時価総額", "出来高", "日数", "件数",
+        "回数", "件", "パターン数",
+    ]
+
+    fmt = {}
+    for col in df.columns:
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+        if any(h in col for h in TWO_DECIMAL_HINTS):
+            fmt[col] = "{:.2f}"
+        elif any(h in col for h in ONE_DECIMAL_HINTS):
+            fmt[col] = "{:.1f}"
+        elif any(h in col for h in INT_HINTS):
+            fmt[col] = "{:,.0f}"
+        else:
+            fmt[col] = "{:.2f}"
+    return fmt
+
+
+def style_table(df: pd.DataFrame, highlight_multi: bool = True):
+    """
+    表示用テーブル(Styler)を作る。
+    - 数値列の小数点表示を列の意味に応じて統一
+    - 「合致パターン数」が2以上の行を黄色くハイライト
+    """
+    fmt = get_format_map(df)
+    styler = df.style.format(fmt, na_rep="-")
+
+    if highlight_multi and "合致パターン数" in df.columns:
+        styler = styler.apply(
+            lambda x: ['background-color: #fff3c4'
+                       if float(x.get("合致パターン数", 0) or 0) >= 2 else ''
+                       for _ in x],
+            axis=1,
+        )
+    return styler
 
 
 def filter_df(df: pd.DataFrame, query: str, first_only: bool) -> pd.DataFrame:
@@ -218,17 +285,10 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
         df.insert(0, "⭐", df["Ticker"].astype(str).apply(
             lambda t: "⭐" if t in wl_tickers else ""))
 
-    # 複数パターン合致のハイライト
+    # 複数パターン合致のハイライト＋数値表示フォーマットの統一
     if "合致パターン数" in df.columns:
         df["合致パターン数"] = pd.to_numeric(df["合致パターン数"], errors="coerce")
-        table_data = df.style.apply(
-            lambda x: ['background-color: #fff3c4'
-                       if float(x.get("合致パターン数", 0) or 0) >= 2 else ''
-                       for _ in x],
-            axis=1,
-        )
-    else:
-        table_data = df
+    table_data = style_table(df)
 
     # 行選択イベント付きのテーブル
     event = st.dataframe(
