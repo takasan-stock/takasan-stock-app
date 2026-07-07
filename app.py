@@ -79,6 +79,73 @@ def load_sheet(sheet_name: str) -> pd.DataFrame:
     return df
 
 
+def to_tradingview_txt(df: pd.DataFrame) -> str:
+    """
+    TradingViewのウォッチリスト用テキストを作る。
+    形式: TSE:7203,TSE:9984,... （カンマ区切り、改行なしの1行）
+    """
+    if df.empty or "証券コード" not in df.columns:
+        return ""
+    codes = df["証券コード"].astype(str).str.strip()
+    codes = [c for c in codes if c and c != "-"]
+    return ",".join(f"TSE:{c}" for c in codes)
+
+
+WATCHLIST_SHEET_NAME = "ウォッチリスト"
+
+@st.cache_data(ttl=60)  # 1分キャッシュ（お気に入り操作の反映を早くする）
+def load_watchlist() -> pd.DataFrame:
+    """ウォッチリスト（証券コード, Ticker, 銘柄名, 登録日）を読み込む"""
+    gc = get_gspread_client()
+    sh = gc.open_by_key(st.secrets["SPREADSHEET_ID"])
+    try:
+        ws = sh.worksheet(WATCHLIST_SHEET_NAME)
+    except gspread.WorksheetNotFound:
+        return pd.DataFrame(columns=["証券コード", "Ticker", "銘柄名", "登録日"])
+
+    values = ws.get_all_values()
+    if not values or len(values) < 2:
+        return pd.DataFrame(columns=["証券コード", "Ticker", "銘柄名", "登録日"])
+    return pd.DataFrame(values[1:], columns=values[0])
+
+
+def save_watchlist(df: pd.DataFrame):
+    """ウォッチリスト全体を書き戻す"""
+    gc = get_gspread_client()
+    sh = gc.open_by_key(st.secrets["SPREADSHEET_ID"])
+    try:
+        ws = sh.worksheet(WATCHLIST_SHEET_NAME)
+        ws.clear()
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=WATCHLIST_SHEET_NAME, rows=500, cols=10)
+
+    if df.empty:
+        ws.update([["証券コード", "Ticker", "銘柄名", "登録日"]])
+    else:
+        values = [df.columns.tolist()] + df.astype(str).values.tolist()
+        ws.update(values)
+    load_watchlist.clear()
+
+
+def add_to_watchlist(code: str, ticker: str, name: str):
+    wl = load_watchlist()
+    if ticker in wl.get("Ticker", pd.Series(dtype=str)).values:
+        return  # 既に登録済み
+    import datetime
+    new_row = pd.DataFrame([{
+        "証券コード": code, "Ticker": ticker, "銘柄名": name,
+        "登録日": datetime.date.today().strftime("%Y-%m-%d"),
+    }])
+    wl = pd.concat([wl, new_row], ignore_index=True)
+    save_watchlist(wl)
+
+
+def remove_from_watchlist(ticker: str):
+    wl = load_watchlist()
+    wl = wl[wl["Ticker"] != ticker]
+    save_watchlist(wl)
+
+
 NUMERIC_HINTS = [
     "終値", "始値", "高値", "安値", "MA", "BAND", "距離", "傾き", "RSI",
     "売買代金", "時価総額", "出来高", "乖離", "σ", "騰落率", "日数",
@@ -122,16 +189,34 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
     df = to_display_df(df)
     df = filter_df(df, query, first_only)
 
+    # ── ウォッチリスト銘柄がヒットしているかチェック ──────
+    wl = load_watchlist()
+    wl_tickers = set(wl["Ticker"].astype(str)) if not wl.empty else set()
+
     hit_note = f"該当 {len(df)} 銘柄"
     if query or first_only:
         hit_note += "（絞り込み適用中）"
     st.caption(hit_note + "　💡 行をクリックするとチャートが表示されます")
+
+    if not df.empty and "Ticker" in df.columns and wl_tickers:
+        wl_hit = df[df["Ticker"].astype(str).isin(wl_tickers)]
+        if not wl_hit.empty:
+            names = ", ".join(
+                (wl_hit["銘柄名"] if "銘柄名" in wl_hit.columns
+                 else wl_hit["Ticker"]).astype(str).tolist()
+            )
+            st.success(f"⭐ ウォッチリスト銘柄がヒットしています: {names}")
 
     if df.empty:
         st.info("絞り込み条件に一致する銘柄はありません。")
         return
 
     df = df.reset_index(drop=True)
+
+    # ── ウォッチリスト銘柄には★マークを付ける ─────────────
+    if "Ticker" in df.columns and wl_tickers:
+        df.insert(0, "⭐", df["Ticker"].astype(str).apply(
+            lambda t: "⭐" if t in wl_tickers else ""))
 
     # 複数パターン合致のハイライト
     if "合致パターン数" in df.columns:
@@ -155,16 +240,29 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
         key=f"table_{sheet_name}",
     )
 
-    csv = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button(
-        label="📥 CSVで保存",
-        data=csv,
-        file_name=f"{sheet_name}.csv",
-        mime="text/csv",
-        key=f"dl_{sheet_name}",
-    )
+    dl_col1, dl_col2 = st.columns(2)
+    with dl_col1:
+        csv = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        st.download_button(
+            label="📥 CSVで保存",
+            data=csv,
+            file_name=f"{sheet_name}.csv",
+            mime="text/csv",
+            key=f"dl_{sheet_name}",
+        )
+    with dl_col2:
+        tv_txt = to_tradingview_txt(df)
+        st.download_button(
+            label="📈 TradingView用txt",
+            data=tv_txt.encode("utf-8"),
+            file_name=f"{sheet_name}_tradingview.txt",
+            mime="text/plain",
+            key=f"tv_{sheet_name}",
+            disabled=(tv_txt == ""),
+            help="TradingViewのウォッチリストにインポートできる形式（TSE:コード,...）で保存します",
+        )
 
-    # ── 行が選択されたらチャートをインライン表示 ──────────
+    # ── 行が選択されたらチャート＋お気に入り操作を表示 ──────
     sel_rows = []
     try:
         sel_rows = event.selection.rows
@@ -179,7 +277,7 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
 
         if ticker:
             st.divider()
-            head_l, head_r = st.columns([3, 2])
+            head_l, head_r, head_star = st.columns([3, 2, 1])
             with head_l:
                 st.markdown(f"#### 📊 {code}　{name}")
             with head_r:
@@ -191,6 +289,18 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
                     label_visibility="collapsed",
                     key=f"period_{sheet_name}",
                 )
+            with head_star:
+                is_fav = ticker in wl_tickers
+                if is_fav:
+                    if st.button("⭐ 解除", key=f"unfav_{sheet_name}",
+                                use_container_width=True):
+                        remove_from_watchlist(ticker)
+                        st.rerun()
+                else:
+                    if st.button("☆ お気に入り登録", key=f"fav_{sheet_name}",
+                                use_container_width=True):
+                        add_to_watchlist(code, ticker, name)
+                        st.rerun()
             period_map = {"3ヶ月": "3mo", "6ヶ月": "6mo", "1年": "1y", "2年": "2y"}
 
             with st.spinner(f"{ticker} のチャートを取得中..."):
@@ -379,6 +489,7 @@ tabs = st.tabs([
     "ボリバンC💥",
     "初押しD🎯",
     "出来高E📢",
+    "🌟 ウォッチリスト",
     "📊 チャート",
 ])
 
@@ -397,9 +508,76 @@ for tab, title, sheet_name in sheet_map:
         render_sheet_tab(title, sheet_name, query, first_only)
 
 # ==========================================
-# チャートタブ
+# ウォッチリストタブ
 # ==========================================
 with tabs[7]:
+    st.subheader("🌟 ウォッチリスト（お気に入り銘柄）")
+    st.caption(
+        "各タブの銘柄をクリック→「☆ お気に入り登録」で追加できます。"
+        "登録した銘柄が他のスクリーニング結果にヒットすると、該当タブの上部に通知が表示されます。"
+    )
+
+    wl = load_watchlist()
+    if wl.empty:
+        st.info("まだお気に入り登録された銘柄がありません。")
+    else:
+        # 表示用に整形
+        wl_disp = wl.reset_index(drop=True)
+        event_wl = st.dataframe(
+            wl_disp,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="table_watchlist",
+        )
+
+        del_col1, del_col2 = st.columns([1, 4])
+        sel_rows_wl = []
+        try:
+            sel_rows_wl = event_wl.selection.rows
+        except Exception:
+            sel_rows_wl = []
+
+        if sel_rows_wl:
+            sel_row = wl_disp.iloc[sel_rows_wl[0]]
+            sel_ticker = str(sel_row.get("Ticker", ""))
+            sel_name   = str(sel_row.get("銘柄名", ""))
+            with del_col1:
+                if st.button(f"🗑️ 削除", key="btn_remove_watchlist",
+                            use_container_width=True):
+                    remove_from_watchlist(sel_ticker)
+                    st.rerun()
+            with del_col2:
+                st.caption(f"選択中: {sel_name}（{sel_ticker}）")
+
+            # ウォッチリスト内の銘柄もチャート表示できるように
+            st.divider()
+            period_label_wl = st.radio(
+                "表示期間", ["3ヶ月", "6ヶ月", "1年", "2年"],
+                index=1, horizontal=True, key="period_watchlist",
+            )
+            period_map = {"3ヶ月": "3mo", "6ヶ月": "6mo", "1年": "1y", "2年": "2y"}
+            with st.spinner(f"{sel_ticker} のチャートを取得中..."):
+                chart_df_wl = fetch_chart_data(sel_ticker, period=period_map[period_label_wl])
+            if not chart_df_wl.empty:
+                fig_wl = build_chart(chart_df_wl, sel_ticker, sel_name)
+                st.plotly_chart(fig_wl, use_container_width=True, key="plot_watchlist")
+
+        # TradingView用の一括エクスポートもここで
+        tv_txt_wl = to_tradingview_txt(wl)
+        st.download_button(
+            label="📈 ウォッチリストをTradingView用txtで保存",
+            data=tv_txt_wl.encode("utf-8"),
+            file_name="watchlist_tradingview.txt",
+            mime="text/plain",
+            key="tv_watchlist",
+            disabled=(tv_txt_wl == ""),
+        )
+
+# ==========================================
+# チャートタブ
+# ==========================================
+with tabs[8]:
     left_col, right_col = st.columns([1, 3])
 
     with left_col:
@@ -413,13 +591,18 @@ with tabs[7]:
             "ボリバンC ブレイク":  "ボリバンCブレイク",
             "初押しD 下ひげ陽線":  "初押しD下ひげ陽線",
             "出来高E 急増ブレイク": "出来高E急増ブレイク",
+            "🌟 ウォッチリスト":   "__watchlist__",
         }
         selected_source = st.selectbox(
             "表示するリスト",
             list(source_options.keys()),
             key="chart_source",
         )
-        df_source = load_sheet(source_options[selected_source])
+        source_key = source_options[selected_source]
+        if source_key == "__watchlist__":
+            df_source = load_watchlist()
+        else:
+            df_source = load_sheet(source_key)
 
         ticker_options = []
         if not df_source.empty and "Ticker" in df_source.columns:
