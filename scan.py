@@ -29,7 +29,7 @@ from google.oauth2.service_account import Credentials
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-07-06-v5-pattern-E"
+SCAN_PY_VERSION = "2026-07-08-v6-skip-duplicate"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -1117,12 +1117,51 @@ def attach_history_stats(df: pd.DataFrame, stats: pd.DataFrame) -> pd.DataFrame:
 # ==========================================
 # 7. メイン処理
 # ==========================================
+def already_scanned_today(gc, spreadsheet_id: str, today_str: str) -> bool:
+    """
+    実行ログシートの最終実行日が今日と同じかどうかを返す。
+    複数時刻でトリガーされたとき、2回目以降をスキップするために使う。
+    """
+    try:
+        sh = gc.open_by_key(spreadsheet_id)
+        ws = sh.worksheet("実行ログ")
+        values = ws.get_all_values()
+        if not values or len(values) < 2:
+            return False
+        header = values[0]
+        if "最終実行日時" not in header:
+            return False
+        idx = header.index("最終実行日時")
+        last_row = values[-1]
+        if idx >= len(last_row):
+            return False
+        # 「2026-07-08 18:40:00 (水曜日, JST)」のような文字列の先頭が今日の日付か
+        return last_row[idx].startswith(today_str)
+    except Exception:
+        return False
+
+
 def main():
     now = now_jst()
     weekday_jp = ["月","火","水","木","金","土","日"][now.weekday()]
     trigger = os.environ.get("GITHUB_EVENT_NAME", "不明（ローカル実行など）")
+    today_str = now.strftime("%Y-%m-%d")
     print(f"=== スキャン開始: {now.strftime('%Y-%m-%d %H:%M:%S')} ({weekday_jp}曜日, JST) "
           f"| トリガー: {trigger} ===", flush=True)
+
+    # ── 当日スキャン済みチェック（複数時刻予約による二重実行を防ぐ）──
+    # スケジュール実行(schedule)のときだけチェックし、手動実行(workflow_dispatch)は常に実行する
+    spreadsheet_id_early = os.environ.get("SPREADSHEET_ID")
+    if trigger == "schedule" and spreadsheet_id_early:
+        try:
+            gc_early = get_gspread_client()
+            if already_scanned_today(gc_early, spreadsheet_id_early, today_str):
+                print(f"本日（{today_str}）はすでにスキャン済みのため、この実行はスキップします。", flush=True)
+                print("=== スキップ終了 ===", flush=True)
+                return
+        except Exception as e:
+            # チェックに失敗しても本処理は続行する（スキャンできない方が困るため）
+            print(f"当日スキャン済みチェックに失敗（処理は続行）: {e}", flush=True)
 
     tickers_all, name_map, jpx_diag = get_jpx_tickers()
     print(f"JPX取得診断: {jpx_diag}", flush=True)
@@ -1216,7 +1255,6 @@ def main():
         raise RuntimeError("環境変数 SPREADSHEET_ID が設定されていません")
 
     gc = get_gspread_client()
-    today_str = now_jst().strftime("%Y-%m-%d")
 
     # ── 履歴に今回のヒットを追記し、1年より古い記録を削除 ──
     print("抽出履歴を更新中...", flush=True)
