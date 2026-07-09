@@ -62,17 +62,46 @@ def get_gspread_client():
     return gspread.authorize(creds)
 
 
+def _open_worksheet_with_retry(sheet_name: str, retries: int = 3):
+    """
+    ワークシートを開いて全値を取得する。
+    Googleの一時的な503エラー等に備えて数回リトライする。
+    戻り値: (values, found)  found=Falseはシート自体が存在しない
+    """
+    import time as _time
+    last_err = None
+    for attempt in range(retries):
+        try:
+            gc = get_gspread_client()
+            sh = gc.open_by_key(st.secrets["SPREADSHEET_ID"])
+            try:
+                ws = sh.worksheet(sheet_name)
+            except gspread.WorksheetNotFound:
+                return [], False
+            return ws.get_all_values(), True
+        except gspread.exceptions.APIError as e:
+            last_err = e
+            # 503(一時的な障害)やレート制限は待って再試行
+            _time.sleep(1.5 * (attempt + 1))
+        except Exception as e:
+            last_err = e
+            _time.sleep(1.0 * (attempt + 1))
+    # リトライしても失敗
+    raise last_err if last_err else RuntimeError("スプレッドシート取得に失敗しました")
+
+
 @st.cache_data(ttl=300)  # 5分キャッシュ
 def load_sheet(sheet_name: str) -> pd.DataFrame:
-    gc = get_gspread_client()
-    sh = gc.open_by_key(st.secrets["SPREADSHEET_ID"])
     try:
-        ws = sh.worksheet(sheet_name)
-    except gspread.WorksheetNotFound:
+        values, found = _open_worksheet_with_retry(sheet_name)
+    except Exception:
+        # 数回リトライしても失敗したら空を返す（画面を落とさない）
+        st.warning(f"「{sheet_name}」の読み込みに失敗しました。"
+                   "Google側が一時的に混雑している可能性があります。"
+                   "少し待ってから『🔄 最新の結果を再取得』を押してください。")
         return pd.DataFrame()
 
-    values = ws.get_all_values()
-    if not values or len(values) < 2:
+    if not found or not values or len(values) < 2:
         return pd.DataFrame()
 
     df = pd.DataFrame(values[1:], columns=values[0])
@@ -93,19 +122,16 @@ def to_tradingview_txt(df: pd.DataFrame) -> str:
 
 WATCHLIST_SHEET_NAME = "ウォッチリスト"
 
-@st.cache_data(ttl=60)  # 1分キャッシュ（お気に入り操作の反映を早くする）
+@st.cache_data(ttl=120)  # 2分キャッシュ
 def load_watchlist() -> pd.DataFrame:
     """ウォッチリスト（証券コード, Ticker, 銘柄名, 登録日）を読み込む"""
-    gc = get_gspread_client()
-    sh = gc.open_by_key(st.secrets["SPREADSHEET_ID"])
+    empty = pd.DataFrame(columns=["証券コード", "Ticker", "銘柄名", "登録日"])
     try:
-        ws = sh.worksheet(WATCHLIST_SHEET_NAME)
-    except gspread.WorksheetNotFound:
-        return pd.DataFrame(columns=["証券コード", "Ticker", "銘柄名", "登録日"])
-
-    values = ws.get_all_values()
-    if not values or len(values) < 2:
-        return pd.DataFrame(columns=["証券コード", "Ticker", "銘柄名", "登録日"])
+        values, found = _open_worksheet_with_retry(WATCHLIST_SHEET_NAME)
+    except Exception:
+        return empty
+    if not found or not values or len(values) < 2:
+        return empty
     return pd.DataFrame(values[1:], columns=values[0])
 
 
@@ -293,7 +319,7 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
     # 行選択イベント付きのテーブル
     event = st.dataframe(
         table_data,
-        use_container_width=True,
+        width='stretch',
         height=460,
         on_select="rerun",
         selection_mode="single-row",
@@ -353,12 +379,12 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
                 is_fav = ticker in wl_tickers
                 if is_fav:
                     if st.button("⭐ 解除", key=f"unfav_{sheet_name}",
-                                use_container_width=True):
+                                width='stretch'):
                         remove_from_watchlist(ticker)
                         st.rerun()
                 else:
                     if st.button("☆ お気に入り登録", key=f"fav_{sheet_name}",
-                                use_container_width=True):
+                                width='stretch'):
                         add_to_watchlist(code, ticker, name)
                         st.rerun()
             period_map = {"3ヶ月": "3mo", "6ヶ月": "6mo", "1年": "1y", "2年": "2y"}
@@ -370,7 +396,7 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
                 st.error(f"{ticker} のデータを取得できませんでした。")
             else:
                 fig = build_chart(chart_df, ticker, name)
-                st.plotly_chart(fig, use_container_width=True,
+                st.plotly_chart(fig, width='stretch',
                                 key=f"plot_{sheet_name}")
 
                 latest = chart_df.iloc[-1]
@@ -502,7 +528,7 @@ with st.sidebar:
                            help="「前回抽出日」が初回の銘柄だけに絞り込みます")
 
     st.divider()
-    if st.button("🔄 最新の結果を再取得", key="btn_refresh", use_container_width=True):
+    if st.button("🔄 最新の結果を再取得", key="btn_refresh", width='stretch'):
         load_sheet.clear()
         st.rerun()
     st.caption("結果は5分間キャッシュされます。スキャン直後はこのボタンで更新してください。")
@@ -585,7 +611,7 @@ with tabs[7]:
         wl_disp = wl.reset_index(drop=True)
         event_wl = st.dataframe(
             wl_disp,
-            use_container_width=True,
+            width='stretch',
             on_select="rerun",
             selection_mode="single-row",
             key="table_watchlist",
@@ -604,7 +630,7 @@ with tabs[7]:
             sel_name   = str(sel_row.get("銘柄名", ""))
             with del_col1:
                 if st.button(f"🗑️ 削除", key="btn_remove_watchlist",
-                            use_container_width=True):
+                            width='stretch'):
                     remove_from_watchlist(sel_ticker)
                     st.rerun()
             with del_col2:
@@ -621,7 +647,7 @@ with tabs[7]:
                 chart_df_wl = fetch_chart_data(sel_ticker, period=period_map[period_label_wl])
             if not chart_df_wl.empty:
                 fig_wl = build_chart(chart_df_wl, sel_ticker, sel_name)
-                st.plotly_chart(fig_wl, use_container_width=True, key="plot_watchlist")
+                st.plotly_chart(fig_wl, width='stretch', key="plot_watchlist")
 
         # TradingView用の一括エクスポートもここで
         tv_txt_wl = to_tradingview_txt(wl)
@@ -709,7 +735,7 @@ with tabs[8]:
                 st.error(f"{selected_ticker} のデータを取得できませんでした。")
             else:
                 fig = build_chart(chart_df, selected_ticker, company_name)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
                 latest = chart_df.iloc[-1]
                 prev   = chart_df.iloc[-2] if len(chart_df) >= 2 else latest
