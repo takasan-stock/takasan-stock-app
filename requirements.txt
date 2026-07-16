@@ -4,3 +4,4 @@ gspread
 google-auth
 yfinance
 plotly
+requests

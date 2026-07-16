@@ -48,6 +48,76 @@ section[data-testid="stSidebar"] h2 { font-size: 1.0rem; }
 """, unsafe_allow_html=True)
 
 # ==========================================
+# GitHub Actions ワークフロー起動
+# ==========================================
+WORKFLOW_FILE = "daily_scan.yml"  # .github/workflows/ 内のファイル名
+
+def trigger_github_workflow() -> tuple[bool, str]:
+    """
+    GitHub Actionsのworkflow_dispatchを叩いてスキャンを起動する。
+    戻り値: (成功したか, メッセージ)
+    """
+    import requests
+    token = st.secrets.get("GITHUB_TOKEN")
+    repo  = st.secrets.get("GITHUB_REPO")
+    if not token or not repo:
+        return False, "GITHUB_TOKEN / GITHUB_REPO がSecretsに設定されていません。"
+
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{WORKFLOW_FILE}/dispatches"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    # main ブランチに対して実行（ブランチ名が違う場合はここを変更）
+    payload = {"ref": "main"}
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=20)
+        if r.status_code == 204:
+            return True, "スキャンを開始しました。"
+        elif r.status_code == 404:
+            return False, ("ワークフローまたはリポジトリが見つかりません。"
+                           "GITHUB_REPO名・ワークフローファイル名・トークン権限を確認してください。")
+        elif r.status_code in (401, 403):
+            return False, ("認証に失敗しました。トークンの権限（Actions: Read and write）"
+                           "や有効期限を確認してください。")
+        else:
+            return False, f"起動に失敗しました（HTTP {r.status_code}）: {r.text[:200]}"
+    except Exception as e:
+        return False, f"リクエスト中にエラーが発生しました: {e}"
+
+
+def get_latest_run_status() -> dict | None:
+    """直近のワークフロー実行の状態を取得する（表示用）"""
+    import requests
+    token = st.secrets.get("GITHUB_TOKEN")
+    repo  = st.secrets.get("GITHUB_REPO")
+    if not token or not repo:
+        return None
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{WORKFLOW_FILE}/runs?per_page=1"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code == 200:
+            runs = r.json().get("workflow_runs", [])
+            if runs:
+                run = runs[0]
+                return {
+                    "status": run.get("status"),          # queued/in_progress/completed
+                    "conclusion": run.get("conclusion"),  # success/failure/None
+                    "created_at": run.get("created_at"),
+                    "html_url": run.get("html_url"),
+                }
+    except Exception:
+        pass
+    return None
+
+
+# ==========================================
 # Googleスプレッドシート読み込み
 # ==========================================
 @st.cache_resource
@@ -534,9 +604,44 @@ with st.sidebar:
     st.caption("結果は5分間キャッシュされます。スキャン直後はこのボタンで更新してください。")
 
     st.divider()
+    st.header("▶️ 手動スキャン")
+    st.caption("GitHub Actionsのスキャンを今すぐ起動します。全銘柄スキャンは完了まで10分前後かかります。")
+
+    if st.button("🚀 スキャンを今すぐ実行", key="btn_run_scan", width='stretch',
+                 type="primary"):
+        ok, msg = trigger_github_workflow()
+        if ok:
+            st.success(f"✅ {msg}")
+            st.info("完了まで10分ほどかかります。しばらく待ってから"
+                    "「🔄 最新の結果を再取得」を押してください。")
+        else:
+            st.error(f"⚠️ {msg}")
+
+    # 直近の実行状態を表示
+    run_info = get_latest_run_status()
+    if run_info:
+        status     = run_info.get("status")
+        conclusion = run_info.get("conclusion")
+        if status == "completed":
+            if conclusion == "success":
+                badge = "✅ 前回のスキャン: 成功"
+            elif conclusion == "failure":
+                badge = "❌ 前回のスキャン: 失敗"
+            else:
+                badge = f"前回のスキャン: {conclusion}"
+        elif status in ("queued", "in_progress"):
+            badge = "⏳ スキャン実行中…（完了まで少々お待ちください）"
+        else:
+            badge = f"状態: {status}"
+        st.caption(badge)
+        if run_info.get("html_url"):
+            st.caption(f"[GitHub Actionsで詳細を見る]({run_info['html_url']})")
+
+    st.divider()
     st.caption(
-        "データ更新: GitHub Actionsが毎営業日 18時頃に自動スキャンし、"
+        "データ更新: GitHub Actionsが毎営業日 夕方〜夜に自動スキャンし、"
         "Googleスプレッドシートへ保存しています。"
+        "自動実行が遅い場合は上の「スキャンを今すぐ実行」で手動起動できます。"
     )
 
 # ==========================================
