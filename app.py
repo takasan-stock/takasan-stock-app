@@ -656,7 +656,7 @@ if not log_df.empty:
                f"対象 {last.get('対象銘柄数', '-')} 銘柄　|　"
                f"トリガー: {last.get('トリガー種別', '-')}")
 
-    m = st.columns(7)
+    m = st.columns(8)
     m[0].metric("⭐ 複数合致",  last.get("複数合致件数", "-"))
     m[1].metric("週足A",        last.get("週足A件数", "-"))
     m[2].metric("日足B1 押し目", last.get("日足B1件数", "-"))
@@ -664,6 +664,7 @@ if not log_df.empty:
     m[4].metric("ボリバンC",     last.get("ボリバンC件数", "-"))
     m[5].metric("初押しD",       last.get("初押しD件数", "-"))
     m[6].metric("出来高E",       last.get("出来高E件数", "-"))
+    m[7].metric("GC底打ちF",     last.get("GC底打ちF件数", "-"))
 else:
     st.warning("実行ログが見つかりません。GitHub Actionsがまだ一度も実行されていない可能性があります。")
 
@@ -680,6 +681,7 @@ tabs = st.tabs([
     "ボリバンC💥",
     "初押しD🎯",
     "出来高E📢",
+    "GC底打ちF🔄",
     "🌟 ウォッチリスト",
     "📊 チャート",
 ])
@@ -692,6 +694,7 @@ sheet_map = [
     (tabs[4], "ボリンジャーバンド +2σ ブレイク", "ボリバンCブレイク"),
     (tabs[5], "初押し・SMA25タッチ 下ひげ陽線", "初押しD下ひげ陽線"),
     (tabs[6], "揉み合い後の出来高急増ブレイク",   "出来高E急増ブレイク"),
+    (tabs[7], "21MA×200MA ゴールデンクロス（底打ち）", "GC底打ちF21x200"),
 ]
 
 for tab, title, sheet_name in sheet_map:
@@ -701,7 +704,7 @@ for tab, title, sheet_name in sheet_map:
 # ==========================================
 # ウォッチリストタブ
 # ==========================================
-with tabs[7]:
+with tabs[8]:
     st.subheader("🌟 ウォッチリスト（お気に入り銘柄）")
     st.caption(
         "各タブの銘柄をクリック→「☆ お気に入り登録」で追加できます。"
@@ -768,7 +771,7 @@ with tabs[7]:
 # ==========================================
 # チャートタブ
 # ==========================================
-with tabs[8]:
+with tabs[9]:
     left_col, right_col = st.columns([1, 3])
 
     with left_col:
@@ -782,6 +785,7 @@ with tabs[8]:
             "ボリバンC ブレイク":  "ボリバンCブレイク",
             "初押しD 下ひげ陽線":  "初押しD下ひげ陽線",
             "出来高E 急増ブレイク": "出来高E急増ブレイク",
+            "GC底打ちF 21×200":   "GC底打ちF21x200",
             "🌟 ウォッチリスト":   "__watchlist__",
         }
         selected_source = st.selectbox(

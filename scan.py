@@ -29,7 +29,7 @@ from google.oauth2.service_account import Credentials
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-07-08-v6-skip-duplicate"
+SCAN_PY_VERSION = "2026-07-11-v7-pattern-F"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -74,6 +74,13 @@ E_LOOKBACK      = 20    # 揉み合い判定期間（当日を除く直近N日�
 E_VOL_SURGE     = 3.0   # 当日出来高が揉み合い平均の何倍以上か
 E_PRICE_MIN     = 0.03  # 当日の前日比上昇率の下限（3%）
 E_MIN_BARS      = 40    # 判定に必要な最低本数
+
+# ── パターンF: 21MA×200MA ゴールデンクロス（底打ち転換）──
+F_GC_DAYS       = 15    # 直近N日以内にGCが起きたこと
+F_SLOPE_DAYS    = 20    # 200MAの傾きを測る期間
+F_DOWN_PREV_MAX = -0.5  # 過去は下向きだった（傾き%がこの値未満）
+F_FLAT_NOW_MIN  = -0.8  # 現在は横ばい〜上向き（傾き%がこの値以上）
+F_MIN_BARS      = 220   # 200MA計算に必要な最低本数
 
 # ==========================================
 # 1. JPX銘柄リスト取得
@@ -278,6 +285,8 @@ def calc_daily(df: pd.DataFrame) -> pd.DataFrame:
     df["RSI"]      = 100 - 100 / (1 + gain / (loss + 1e-9))
     df["MA50_s5"]  = df["MA50"].pct_change(5) * 100
     df["MA25_s5"]  = df["MA25"].pct_change(5) * 100   # SMA25の傾き
+    df["MA200_sF"]     = df["MA200"].pct_change(F_SLOPE_DAYS) * 100          # 200MAの傾き（現在）
+    df["MA200_sF_prev"] = df["MA200_sF"].shift(F_SLOPE_DAYS)                 # 200MAの傾き（過去）
     return df
 
 def check_a(df: pd.DataFrame, ctr: dict) -> dict | None:
@@ -640,6 +649,64 @@ def check_e(df: pd.DataFrame, ctr: dict) -> dict | None:
     }
 
 
+def check_f(df: pd.DataFrame, ctr: dict) -> dict | None:
+    """
+    パターンF:「21MA×200MA ゴールデンクロス（底打ち・第一ステージ転換）」
+    ══════════════════════════════════════════════════════════
+    ① 日足21MAが200MAを直近F_GC_DAYS日以内にゴールデンクロス
+       （現在は21MA > 200MA、かつ少し前は21MA <= 200MAだった）
+    ② 200MAの傾きが「下向き → 横ばい」に転換している
+       - 過去（F_SLOPE_DAYS日前基準）は下向き（傾き% < F_DOWN_PREV_MAX）
+       - 現在は横ばい〜上向き（傾き% >= F_FLAT_NOW_MIN）
+    ※時価総額500億円以上は共通フィルタで担保
+    ══════════════════════════════════════════════════════════
+    """
+    def drop(k): ctr[k] = ctr.get(k, 0) + 1; return None
+
+    need = ["MA21", "MA200", "MA200_sF", "MA200_sF_prev", "Close"]
+    d = df.dropna(subset=need)
+    if len(d) < 5:
+        return drop("F_データ不足")
+
+    cur = d.iloc[-1]
+    ma21  = float(cur["MA21"]);  ma200 = float(cur["MA200"])
+    close = float(cur["Close"])
+    slope_now  = float(cur["MA200_sF"])
+    slope_prev = float(cur["MA200_sF_prev"])
+
+    # ① 現在は21MAが200MAより上
+    if ma21 <= ma200:
+        return drop("F_①GC未成立")
+
+    # ① 直近F_GC_DAYS日以内にクロスした（それ以前は21MA <= 200MAだった日がある）
+    recent = d.iloc[-(F_GC_DAYS + 1):]
+    was_below = (recent["MA21"] <= recent["MA200"]).any()
+    if not was_below:
+        return drop("F_①GCが古すぎ")   # ずっと上＝クロスは古い
+
+    # ② 過去は下向き
+    if slope_prev >= F_DOWN_PREV_MAX:
+        return drop("F_②過去に下降なし")
+    # ② 現在は横ばい〜上向き
+    if slope_now < F_FLAT_NOW_MIN:
+        return drop("F_②まだ下降中")
+
+    # クロスからの経過日数を求める
+    below_idx = recent[recent["MA21"] <= recent["MA200"]].index
+    days_since_gc = (d.index[-1] - below_idx[-1]).days if len(below_idx) else 0
+
+    ctr["F_合格"] = ctr.get("F_合格", 0) + 1
+    return {
+        "close"        : round(close, 1),
+        "ma21"         : round(ma21, 1),
+        "ma200"        : round(ma200, 1),
+        "gc_gap_pct"   : round((ma21 - ma200) / ma200 * 100, 2),
+        "slope_prev"   : round(slope_prev, 2),
+        "slope_now"    : round(slope_now, 2),
+        "days_since_gc": int(days_since_gc),
+    }
+
+
 # ==========================================
 # 4. ファンダメンタル情報
 # ==========================================
@@ -745,7 +812,7 @@ def enrich_with_fundamentals(df: pd.DataFrame, name_map: dict | None = None,
 # 5. バッチ処理 & スキャン
 # ==========================================
 def process_batch(batch: list, ctr: dict, min_turnover, min_mktcap) -> tuple:
-    ra, rb1, rb2, rc, rd, re_ = [], [], [], [], [], []
+    ra, rb1, rb2, rc, rd, re_, rf = [], [], [], [], [], [], []
     cache_w, _ = download_batch(batch, "3y", "1wk", "週足")
     cache_d, _ = download_batch(batch, "2y", "1d",  "日足")
 
@@ -825,10 +892,17 @@ def process_batch(batch: list, ctr: dict, min_turnover, min_mktcap) -> tuple:
                 if res:
                     res.update({"ticker":ticker,"code":code,"avg_to":avg_to_oku,"mktcap":mktcap_oku})
                     re_.append(res)
+
+            # ── パターンF（21MA×200MA GC底打ち）。日足のcalc_daily済みデータを使う ──
+            if dfd2_calc is not None and len(dfd2_calc) >= F_MIN_BARS:
+                res = check_f(dfd2_calc, ctr)
+                if res:
+                    res.update({"ticker":ticker,"code":code,"avg_to":avg_to_oku,"mktcap":mktcap_oku})
+                    rf.append(res)
         except Exception:
             pass
 
-    return ra, rb1, rb2, rc, rd, re_
+    return ra, rb1, rb2, rc, rd, re_, rf
 
 
 def format_a(rows):
@@ -868,7 +942,14 @@ def format_e(rows):
     # 出来高倍率が高い順（勢いの強い順）に並べる
     return d.sort_values("出来高倍率", ascending=False).reset_index(drop=True)
 
-def build_multi_hit(dfa, dfb1, dfb2, dfc, dfd, dfe):
+def format_f(rows):
+    if not rows: return pd.DataFrame()
+    d = pd.DataFrame(rows)[["code","ticker","close","ma21","ma200","gc_gap_pct","slope_prev","slope_now","days_since_gc","avg_to","mktcap"]]
+    d.columns = ["証券コード","Ticker","終値","21日MA","200日MA","GC乖離%","200MA傾き(過去)%","200MA傾き(現在)%","GCからの日数","売買代金(億円)","時価総額(億円)"]
+    # クロスから日数が浅い順（新鮮な転換順）に並べる
+    return d.sort_values("GCからの日数", ascending=True).reset_index(drop=True)
+
+def build_multi_hit(dfa, dfb1, dfb2, dfc, dfd, dfe, dff):
     hits = {}
     def register(df, pattern):
         if df.empty: return
@@ -889,6 +970,7 @@ def build_multi_hit(dfa, dfb1, dfb2, dfc, dfd, dfe):
     register(dfc,  "ボリバンC")
     register(dfd,  "初押しD")
     register(dfe,  "出来高E")
+    register(dff,  "GC底打ちF")
     if not hits: return pd.DataFrame()
     rows = []
     for t, v in hits.items():
@@ -986,7 +1068,8 @@ def append_today_to_history(gc: gspread.Client, spreadsheet_id: str,
                             dfa: pd.DataFrame, dfb1: pd.DataFrame,
                             dfb2: pd.DataFrame, dfc: pd.DataFrame,
                             dfd: pd.DataFrame = None,
-                            dfe: pd.DataFrame = None) -> pd.DataFrame:
+                            dfe: pd.DataFrame = None,
+                            dff: pd.DataFrame = None) -> pd.DataFrame:
     """
     今回ヒットした銘柄を履歴に追記し、1年より古い行を削除した上で
     スプレッドシートに書き戻す。戻り値は更新後の履歴DataFrame。
@@ -1006,6 +1089,7 @@ def append_today_to_history(gc: gspread.Client, spreadsheet_id: str,
     collect(dfc,  "ボリバンC")
     collect(dfd,  "初押しD")
     collect(dfe,  "出来高E")
+    collect(dff,  "GC底打ちF")
 
     if new_rows:
         new_df = pd.DataFrame(new_rows)
@@ -1171,7 +1255,7 @@ def main():
     total = len(batches)
     print(f"バッチ数: {total}", flush=True)
 
-    all_a, all_b1, all_b2, all_c, all_d, all_e = [], [], [], [], [], []
+    all_a, all_b1, all_b2, all_c, all_d, all_e, all_f = [], [], [], [], [], [], []
     ctr = {}
     t0 = time.time()
 
@@ -1181,9 +1265,9 @@ def main():
         completed = 0
         for future in as_completed(futures):
             try:
-                ra, rb1, rb2, rc, rd, re_ = future.result()
+                ra, rb1, rb2, rc, rd, re_, rf = future.result()
                 all_a.extend(ra); all_b1.extend(rb1); all_b2.extend(rb2)
-                all_c.extend(rc); all_d.extend(rd); all_e.extend(re_)
+                all_c.extend(rc); all_d.extend(rd); all_e.extend(re_); all_f.extend(rf)
             except Exception as e:
                 print(f"バッチエラー: {e}", flush=True)
             completed += 1
@@ -1195,7 +1279,8 @@ def main():
     elapsed = time.time() - t0
     print(f"=== スキャン完了 ({elapsed/60:.1f}分) ===", flush=True)
     print(f"週足A: {len(all_a)}件 / 日足B1: {len(all_b1)}件 / 日足B2: {len(all_b2)}件 / "
-          f"ボリバンC: {len(all_c)}件 / 初押しD: {len(all_d)}件 / 出来高E: {len(all_e)}件", flush=True)
+          f"ボリバンC: {len(all_c)}件 / 初押しD: {len(all_d)}件 / 出来高E: {len(all_e)}件 / "
+          f"GC底打ちF: {len(all_f)}件", flush=True)
 
     # ── 診断カウンター（各パターンがどの条件で何銘柄落ちたか）──
     if ctr:
@@ -1210,6 +1295,7 @@ def main():
             "C_": "【ボリバンC ブレイク】",
             "D_": "【初押しD 下ひげ陽線】",
             "E_": "【出来高E 急増ブレイク】",
+            "F_": "【GC底打ちF 21×200GC】",
         }
         for prefix, title in groups.items():
             keys = sorted(k for k in ctr if k.startswith(prefix))
@@ -1238,6 +1324,7 @@ def main():
     dfc  = format_c(all_c)
     dfd  = format_d(all_d)
     dfe  = format_e(all_e)
+    dff  = format_f(all_f)
 
     print("ファンダメンタルズ取得中...", flush=True)
     dfa  = enrich_with_fundamentals(dfa,  name_map)
@@ -1246,8 +1333,9 @@ def main():
     dfc  = enrich_with_fundamentals(dfc,  name_map)
     dfd  = enrich_with_fundamentals(dfd,  name_map)
     dfe  = enrich_with_fundamentals(dfe,  name_map)
+    dff  = enrich_with_fundamentals(dff,  name_map)
 
-    dfm = build_multi_hit(dfa, dfb1, dfb2, dfc, dfd, dfe)
+    dfm = build_multi_hit(dfa, dfb1, dfb2, dfc, dfd, dfe, dff)
 
     # ── スプレッドシートへ書き込み ──
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
@@ -1258,7 +1346,7 @@ def main():
 
     # ── 履歴に今回のヒットを追記し、1年より古い記録を削除 ──
     print("抽出履歴を更新中...", flush=True)
-    history = append_today_to_history(gc, spreadsheet_id, today_str, dfa, dfb1, dfb2, dfc, dfd, dfe)
+    history = append_today_to_history(gc, spreadsheet_id, today_str, dfa, dfb1, dfb2, dfc, dfd, dfe, dff)
     stats = compute_history_stats(history, today_str)
 
     # ── 各結果に「前回抽出日」「年間抽出回数」を付与 ──
@@ -1268,6 +1356,7 @@ def main():
     dfc  = attach_history_stats(dfc,  stats)
     dfd  = attach_history_stats(dfd,  stats)
     dfe  = attach_history_stats(dfe,  stats)
+    dff  = attach_history_stats(dff,  stats)
     if not dfm.empty:
         dfm = attach_history_stats(dfm, stats)
 
@@ -1279,6 +1368,7 @@ def main():
     write_df_to_sheet(gc, spreadsheet_id, "ボリバンCブレイク",   dfc)
     write_df_to_sheet(gc, spreadsheet_id, "初押しD下ひげ陽線",   dfd)
     write_df_to_sheet(gc, spreadsheet_id, "出来高E急増ブレイク",  dfe)
+    write_df_to_sheet(gc, spreadsheet_id, "GC底打ちF21x200",     dff)
 
     # ── メタ情報シート（最終実行日時など）も書いておく ──
     end_now = now_jst()
@@ -1293,6 +1383,7 @@ def main():
         "ボリバンC件数": len(dfc),
         "初押しD件数": len(dfd),
         "出来高E件数": len(dfe),
+        "GC底打ちF件数": len(dff),
         "複数合致件数": len(dfm),
         "履歴保存件数": len(history),
         "JPX取得診断": jpx_diag,
