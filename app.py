@@ -814,12 +814,52 @@ with tabs[10]:
 
         selected_ticker = None
         if ticker_options:
+            labels_list = [lbl for lbl, _ in ticker_options]
+            n_opts = len(labels_list)
+
+            # ── 現在の選択位置をsession_stateで管理 ──
+            # リスト(source)が変わったら位置を0にリセット
+            if st.session_state.get("chart_source_prev") != selected_source:
+                st.session_state["chart_idx"] = 0
+                st.session_state["chart_source_prev"] = selected_source
+            # 範囲外にならないよう補正
+            idx = st.session_state.get("chart_idx", 0)
+            idx = max(0, min(idx, n_opts - 1))
+            st.session_state["chart_idx"] = idx
+
+            # ── 前へ / 次へ ボタン ──
+            nav_prev, nav_pos, nav_next = st.columns([1, 1, 1])
+            with nav_prev:
+                if st.button("◀ 前へ", key="chart_prev", width='stretch',
+                             disabled=(idx <= 0)):
+                    st.session_state["chart_idx"] = idx - 1
+                    st.rerun()
+            with nav_pos:
+                st.markdown(
+                    f"<div style='text-align:center;padding-top:6px;'>"
+                    f"{idx + 1} / {n_opts}</div>",
+                    unsafe_allow_html=True,
+                )
+            with nav_next:
+                if st.button("次へ ▶", key="chart_next", width='stretch',
+                             disabled=(idx >= n_opts - 1)):
+                    st.session_state["chart_idx"] = idx + 1
+                    st.rerun()
+
+            # ── selectbox（直接選択も可能。位置と同期）──
+            # keyは付けずindexで制御（keyとindex併用はsession_stateと競合するため）
             selected_label = st.selectbox(
                 "銘柄",
-                [lbl for lbl, _ in ticker_options],
-                key="chart_ticker",
+                labels_list,
+                index=idx,
             )
-            selected_ticker = dict(ticker_options)[selected_label]
+            # selectboxで直接選ばれたら、その位置にst.session_stateを合わせる
+            picked_idx = labels_list.index(selected_label)
+            if picked_idx != idx:
+                st.session_state["chart_idx"] = picked_idx
+                idx = picked_idx
+
+            selected_ticker = ticker_options[idx][1]
 
             selected_period_label = st.radio(
                 "表示期間",
