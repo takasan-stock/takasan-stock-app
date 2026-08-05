@@ -598,7 +598,7 @@ with st.sidebar:
                            help="「前回抽出日」が初回の銘柄だけに絞り込みます")
 
     st.divider()
-    if st.button("🔄 最新の結果を再取得", key="btn_refresh", width='stretch'):
+    if st.button("🔄 最新の結果を再取得", key="btn_refresh", use_container_width=True):
         load_sheet.clear()
         st.rerun()
     st.caption("結果は5分間キャッシュされます。スキャン直後はこのボタンで更新してください。")
