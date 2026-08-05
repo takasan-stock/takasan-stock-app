@@ -389,7 +389,7 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
     # 行選択イベント付きのテーブル
     event = st.dataframe(
         table_data,
-        width='stretch',
+        use_container_width=True,
         height=460,
         on_select="rerun",
         selection_mode="single-row",
@@ -449,12 +449,12 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
                 is_fav = ticker in wl_tickers
                 if is_fav:
                     if st.button("⭐ 解除", key=f"unfav_{sheet_name}",
-                                width='stretch'):
+                                use_container_width=True):
                         remove_from_watchlist(ticker)
                         st.rerun()
                 else:
                     if st.button("☆ お気に入り登録", key=f"fav_{sheet_name}",
-                                width='stretch'):
+                                use_container_width=True):
                         add_to_watchlist(code, ticker, name)
                         st.rerun()
             period_map = {"3ヶ月": "3mo", "6ヶ月": "6mo", "1年": "1y", "2年": "2y"}
@@ -466,7 +466,7 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
                 st.error(f"{ticker} のデータを取得できませんでした。")
             else:
                 fig = build_chart(chart_df, ticker, name)
-                st.plotly_chart(fig, width='stretch',
+                st.plotly_chart(fig, use_container_width=True,
                                 key=f"plot_{sheet_name}")
 
                 latest = chart_df.iloc[-1]
@@ -607,7 +607,7 @@ with st.sidebar:
     st.header("▶️ 手動スキャン")
     st.caption("GitHub Actionsのスキャンを今すぐ起動します。全銘柄スキャンは完了まで10分前後かかります。")
 
-    if st.button("🚀 スキャンを今すぐ実行", key="btn_run_scan", width='stretch',
+    if st.button("🚀 スキャンを今すぐ実行", key="btn_run_scan", use_container_width=True,
                  type="primary"):
         ok, msg = trigger_github_workflow()
         if ok:
@@ -722,7 +722,7 @@ with tabs[9]:
         wl_disp = wl.reset_index(drop=True)
         event_wl = st.dataframe(
             wl_disp,
-            width='stretch',
+            use_container_width=True,
             on_select="rerun",
             selection_mode="single-row",
             key="table_watchlist",
@@ -741,7 +741,7 @@ with tabs[9]:
             sel_name   = str(sel_row.get("銘柄名", ""))
             with del_col1:
                 if st.button(f"🗑️ 削除", key="btn_remove_watchlist",
-                            width='stretch'):
+                            use_container_width=True):
                     remove_from_watchlist(sel_ticker)
                     st.rerun()
             with del_col2:
@@ -758,7 +758,7 @@ with tabs[9]:
                 chart_df_wl = fetch_chart_data(sel_ticker, period=period_map[period_label_wl])
             if not chart_df_wl.empty:
                 fig_wl = build_chart(chart_df_wl, sel_ticker, sel_name)
-                st.plotly_chart(fig_wl, width='stretch', key="plot_watchlist")
+                st.plotly_chart(fig_wl, use_container_width=True, key="plot_watchlist")
 
         # TradingView用の一括エクスポートもここで
         tv_txt_wl = to_tradingview_txt(wl)
@@ -830,7 +830,7 @@ with tabs[10]:
             # ── 前へ / 次へ ボタン ──
             nav_prev, nav_pos, nav_next = st.columns([1, 1, 1])
             with nav_prev:
-                if st.button("◀ 前へ", key="chart_prev", width='stretch',
+                if st.button("◀ 前へ", key="chart_prev", use_container_width=True,
                              disabled=(idx <= 0)):
                     st.session_state["chart_idx"] = idx - 1
                     st.rerun()
@@ -841,7 +841,7 @@ with tabs[10]:
                     unsafe_allow_html=True,
                 )
             with nav_next:
-                if st.button("次へ ▶", key="chart_next", width='stretch',
+                if st.button("次へ ▶", key="chart_next", use_container_width=True,
                              disabled=(idx >= n_opts - 1)):
                     st.session_state["chart_idx"] = idx + 1
                     st.rerun()
@@ -888,7 +888,7 @@ with tabs[10]:
                 st.error(f"{selected_ticker} のデータを取得できませんでした。")
             else:
                 fig = build_chart(chart_df, selected_ticker, company_name)
-                st.plotly_chart(fig, width='stretch')
+                st.plotly_chart(fig, use_container_width=True)
 
                 latest = chart_df.iloc[-1]
                 prev   = chart_df.iloc[-2] if len(chart_df) >= 2 else latest
