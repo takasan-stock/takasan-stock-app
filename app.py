@@ -668,9 +668,10 @@ def render_momentum_tab():
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     # フィルター
+    max_score_available = df["スコア"].max() if "スコア" in df.columns else 0
     f1, f2, f3, f4 = st.columns(4)
     with f1:
-        min_score = st.slider("最低スコア", 0, 100, 60, 5, key="mom_min_score")
+        min_score = st.slider("最低スコア", 0, 100, 30, 5, key="mom_min_score")
     with f2:
         signal = st.selectbox(
             "シグナル",
@@ -689,6 +690,10 @@ def render_momentum_tab():
             value=False,
             key="mom_recent_only"
         )
+
+    if pd.notna(max_score_available):
+        st.caption(f"💡 今回のスキャンでの最高スコアは {max_score_available:.0f} 点です。"
+                   "該当が少ない場合はスライダーを下げてみてください。")
 
     out = df[df["スコア"].fillna(0) >= min_score].copy()
     if signal != "すべて" and "シグナル" in out.columns:
