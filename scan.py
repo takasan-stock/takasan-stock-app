@@ -31,7 +31,7 @@ from google.oauth2.service_account import Credentials
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-08-13-v10-momentum-optimized"
+SCAN_PY_VERSION = "2026-08-13-v11-nan-safe-sheet"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -1162,7 +1162,14 @@ def write_df_to_sheet(gc: gspread.Client, spreadsheet_id: str,
         ws.update([["該当銘柄なし"]])
         return
 
-    values = [df.columns.tolist()] + df.astype(str).values.tolist()
+    # NaN/Infは df.astype(str) だけでは float のまま残ることがあり、
+    # Google Sheets APIへの送信時に「Out of range float values are not
+    # JSON compliant」で失敗するため、先に明示的な文字列へ置き換える。
+    safe_df = df.replace([np.inf, -np.inf], np.nan)
+    safe_df = safe_df.astype(object).where(pd.notna(safe_df), "")
+    safe_df = safe_df.astype(str)
+
+    values = [safe_df.columns.tolist()] + safe_df.values.tolist()
     ws.update(values)
 
 
