@@ -389,7 +389,6 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
     # 行選択イベント付きのテーブル
     event = st.dataframe(
         table_data,
-        width='stretch',
         height=460,
         on_select="rerun",
         selection_mode="single-row",
@@ -466,7 +465,7 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
                 st.error(f"{ticker} のデータを取得できませんでした。")
             else:
                 fig = build_chart(chart_df, ticker, name)
-                st.plotly_chart(fig, width='stretch',
+                st.plotly_chart(fig, use_container_width=True,
                                 key=f"plot_{sheet_name}")
 
                 latest = chart_df.iloc[-1]
@@ -710,7 +709,6 @@ def render_momentum_tab():
     cols = [c for c in cols if c in out.columns]
     st.dataframe(
         out[cols].reset_index(drop=True),
-        width='stretch',
         height=520,
         hide_index=True,
     )
@@ -776,7 +774,7 @@ def render_momentum_tab():
     if not chart_df.empty:
         name = str(row.get("銘柄名", ""))
         fig = build_chart(chart_df, ticker, name)
-        st.plotly_chart(fig, width='stretch', key="momentum_chart")
+        st.plotly_chart(fig, use_container_width=True, key="momentum_chart")
 
 
 # ==========================================
@@ -865,7 +863,6 @@ with tabs[10]:
         wl_disp = wl.reset_index(drop=True)
         event_wl = st.dataframe(
             wl_disp,
-            width='stretch',
             on_select="rerun",
             selection_mode="single-row",
             key="table_watchlist",
@@ -901,7 +898,7 @@ with tabs[10]:
                 chart_df_wl = fetch_chart_data(sel_ticker, period=period_map[period_label_wl])
             if not chart_df_wl.empty:
                 fig_wl = build_chart(chart_df_wl, sel_ticker, sel_name)
-                st.plotly_chart(fig_wl, width='stretch', key="plot_watchlist")
+                st.plotly_chart(fig_wl, use_container_width=True, key="plot_watchlist")
 
         # TradingView用の一括エクスポートもここで
         tv_txt_wl = to_tradingview_txt(wl)
@@ -1032,7 +1029,7 @@ with tabs[11]:
                 st.error(f"{selected_ticker} のデータを取得できませんでした。")
             else:
                 fig = build_chart(chart_df, selected_ticker, company_name)
-                st.plotly_chart(fig, width='stretch')
+                st.plotly_chart(fig, use_container_width=True)
 
                 latest = chart_df.iloc[-1]
                 prev   = chart_df.iloc[-2] if len(chart_df) >= 2 else latest
