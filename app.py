@@ -449,12 +449,12 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
                 is_fav = ticker in wl_tickers
                 if is_fav:
                     if st.button("⭐ 解除", key=f"unfav_{sheet_name}",
-                                width='stretch'):
+                                use_container_width=True):
                         remove_from_watchlist(ticker)
                         st.rerun()
                 else:
                     if st.button("☆ お気に入り登録", key=f"fav_{sheet_name}",
-                                width='stretch'):
+                                use_container_width=True):
                         add_to_watchlist(code, ticker, name)
                         st.rerun()
             period_map = {"3ヶ月": "3mo", "6ヶ月": "6mo", "1年": "1y", "2年": "2y"}
@@ -598,7 +598,7 @@ with st.sidebar:
                            help="「前回抽出日」が初回の銘柄だけに絞り込みます")
 
     st.divider()
-    if st.button("🔄 最新の結果を再取得", key="btn_refresh", width='stretch'):
+    if st.button("🔄 最新の結果を再取得", key="btn_refresh", use_container_width=True):
         load_sheet.clear()
         st.rerun()
     st.caption("結果は5分間キャッシュされます。スキャン直後はこのボタンで更新してください。")
@@ -607,7 +607,7 @@ with st.sidebar:
     st.header("▶️ 手動スキャン")
     st.caption("GitHub Actionsのスキャンを今すぐ起動します。全銘柄スキャンは完了まで10分前後かかります。")
 
-    if st.button("🚀 スキャンを今すぐ実行", key="btn_run_scan", width='stretch',
+    if st.button("🚀 スキャンを今すぐ実行", key="btn_run_scan", use_container_width=True,
                  type="primary"):
         ok, msg = trigger_github_workflow()
         if ok:
@@ -884,7 +884,7 @@ with tabs[10]:
             sel_name   = str(sel_row.get("銘柄名", ""))
             with del_col1:
                 if st.button(f"🗑️ 削除", key="btn_remove_watchlist",
-                            width='stretch'):
+                            use_container_width=True):
                     remove_from_watchlist(sel_ticker)
                     st.rerun()
             with del_col2:
@@ -974,7 +974,7 @@ with tabs[11]:
             # ── 前へ / 次へ ボタン ──
             nav_prev, nav_pos, nav_next = st.columns([1, 1, 1])
             with nav_prev:
-                if st.button("◀ 前へ", key="chart_prev", width='stretch',
+                if st.button("◀ 前へ", key="chart_prev", use_container_width=True,
                              disabled=(idx <= 0)):
                     st.session_state["chart_idx"] = idx - 1
                     st.rerun()
@@ -985,7 +985,7 @@ with tabs[11]:
                     unsafe_allow_html=True,
                 )
             with nav_next:
-                if st.button("次へ ▶", key="chart_next", width='stretch',
+                if st.button("次へ ▶", key="chart_next", use_container_width=True,
                              disabled=(idx >= n_opts - 1)):
                     st.session_state["chart_idx"] = idx + 1
                     st.rerun()
