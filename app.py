@@ -662,7 +662,7 @@ def render_momentum_tab():
     for col in [
         "スコア", "決算後騰落率%", "売上成長%", "営業利益成長%",
         "EPS/純利益成長%", "営業利益率%", "EPSサプライズ%",
-        "出来高倍率", "20日騰落率%", "RS風", "業績点", "株価点"
+        "決算反応出来高倍率", "現在出来高倍率", "20日騰落率%", "RS風", "業績点", "決算イベント点", "現在テクニカル点"
     ]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -702,8 +702,8 @@ def render_momentum_tab():
 
     cols = [
         "順位", "証券コード", "銘柄名", "決算日", "スコア", "ランク", "シグナル",
-        "決算後騰落率%", "売上成長%", "営業利益成長%", "EPS/純利益成長%",
-        "成長加速", "EPSサプライズ%", "出来高倍率", "SMA25上",
+        "決算後騰落率%", "決算反応日", "決算後経過営業日", "売上成長%", "営業利益成長%", "EPS/純利益成長%",
+        "成長加速", "EPSサプライズ%", "決算反応出来高倍率", "現在出来高倍率", "SMA25上",
         "20日高値更新", "52週高値接近", "RS風"
     ]
     cols = [c for c in cols if c in out.columns]
@@ -756,7 +756,7 @@ def render_momentum_tab():
     m[1].metric("ランク", str(row.get("ランク", "-")))
     m[2].metric("シグナル", str(row.get("シグナル", "-")))
     m[3].metric("決算後", f"{float(row['決算後騰落率%']):+.1f}%" if not pd.isna(row.get("決算後騰落率%")) else "-")
-    m[4].metric("出来高", f"{float(row['出来高倍率']):.2f}倍" if not pd.isna(row.get("出来高倍率")) else "-")
+    m[4].metric("出来高", f"{float(row['決算反応出来高倍率']):.2f}倍" if not pd.isna(row.get("決算反応出来高倍率")) else "-")
     m[5].metric("RS風", f"{float(row['RS風']):.1f}" if not pd.isna(row.get("RS風")) else "-")
 
     p1, p2, p3, p4 = st.columns(4)
@@ -766,9 +766,10 @@ def render_momentum_tab():
     p4.metric("利確② +25%", f"¥{tp2:,.0f}" if not pd.isna(tp2) else "-")
 
     st.markdown(
-        "**基本ルール:** 決算後+3%以上・出来高1.5倍以上・SMA25上を通常BUY条件、"
-        "決算後+7%以上・出来高2倍以上・20日高値更新を強力BUY条件として表示しています。"
-        "寄り付きへの飛びつきではなく、押し目を待つ前提です。"
+        "**v3基本ルール:** 決算後5営業日以内をBUY判定の対象とし、"
+        "通常BUYは決算後+3%以上・決算反応出来高1.5倍以上・SMA25上、"
+        "強力BUYは決算後+7%以上・決算反応出来高2倍以上・20日高値更新を条件にします。"
+        "決算反応時の出来高と現在の出来高を分離し、寄り付きへの飛びつきではなく押し目を待つ前提です。"
     )
 
     if not chart_df.empty:
