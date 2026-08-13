@@ -25,7 +25,7 @@ import yfinance as yf
 
 warnings.filterwarnings("ignore")
 
-MOMENTUM_VERSION = "2026-08-13-v3-event-based"
+MOMENTUM_VERSION = "2026-08-13-v4-coverage-normalized"
 
 # =========================================================
 # 設定
@@ -482,13 +482,21 @@ def calculate_rs(dfd: pd.DataFrame) -> float:
 # 現在テクニカル      = 15点
 # =========================================================
 
-def score_financials(fin: dict, event: dict) -> tuple[int, dict]:
+def score_financials(fin: dict, event: dict) -> tuple[int, int, dict]:
+    """
+    戻り値: (獲得点, 採点できた項目の満点合計(evaluated_max), 内訳detail)
+    データが欠損している項目は採点自体をスキップし、evaluated_maxにも加えない。
+    これにより「データが薄いから低スコアになる」ことを防ぎ、
+    後段でカテゴリごとに正規化できるようにする。
+    """
     score = 0
+    evaluated_max = 0
     detail = {}
 
     # ① 売上成長 12点
     x = fin["revenue_growth"]
     if not pd.isna(x):
+        evaluated_max += 12
         if x >= 20:
             pts = 12
         elif x >= 10:
@@ -505,6 +513,7 @@ def score_financials(fin: dict, event: dict) -> tuple[int, dict]:
     # ② 営業利益成長 18点
     x = fin["operating_growth"]
     if not pd.isna(x):
+        evaluated_max += 18
         if x >= 30:
             pts = 18
         elif x >= 20:
@@ -524,6 +533,7 @@ def score_financials(fin: dict, event: dict) -> tuple[int, dict]:
         x = fin["net_income_growth"]
 
     if not pd.isna(x):
+        evaluated_max += 12
         if x >= 30:
             pts = 12
         elif x >= 20:
@@ -537,22 +547,25 @@ def score_financials(fin: dict, event: dict) -> tuple[int, dict]:
         score += pts
         detail["EPS/純利益成長"] = pts
 
-    # ④ 成長加速 13点
+    # ④ 成長加速 13点（3つの小項目、それぞれ判定可能なら加点）
     pts = 0
+    accel_max = 0
 
     if (
         not pd.isna(fin["operating_growth"])
         and not pd.isna(fin["operating_growth_prev"])
-        and fin["operating_growth"] > fin["operating_growth_prev"]
     ):
-        pts += 7
+        accel_max += 7
+        if fin["operating_growth"] > fin["operating_growth_prev"]:
+            pts += 7
 
     if (
         not pd.isna(fin["revenue_growth"])
         and not pd.isna(fin["revenue_growth_prev"])
-        and fin["revenue_growth"] > fin["revenue_growth_prev"]
     ):
-        pts += 3
+        accel_max += 3
+        if fin["revenue_growth"] > fin["revenue_growth_prev"]:
+            pts += 3
 
     eps_now = (
         fin["eps_growth"]
@@ -565,33 +578,34 @@ def score_financials(fin: dict, event: dict) -> tuple[int, dict]:
         else fin["net_income_growth_prev"]
     )
 
-    if (
-        not pd.isna(eps_now)
-        and not pd.isna(eps_prev)
-        and eps_now > eps_prev
-    ):
-        pts += 3
+    if not pd.isna(eps_now) and not pd.isna(eps_prev):
+        accel_max += 3
+        if eps_now > eps_prev:
+            pts += 3
 
-    score += pts
-    detail["成長加速"] = pts
+    if accel_max > 0:
+        evaluated_max += accel_max
+        score += pts
+        detail["成長加速"] = pts
 
     # ⑤ 利益率改善 5点
     margin = fin["operating_margin"]
     prev = fin["operating_margin_prev"]
 
-    pts = 0
     if not pd.isna(margin):
+        evaluated_max += 5
+        pts = 0
         if not pd.isna(prev) and margin > prev:
             pts = 5
         elif margin >= 10:
             pts = 3
-
-    score += pts
-    detail["利益率改善"] = pts
+        score += pts
+        detail["利益率改善"] = pts
 
     # ⑥ EPSサプライズ 10点
     x = event["eps_surprise"]
     if not pd.isna(x):
+        evaluated_max += 10
         if x >= 20:
             pts = 10
         elif x >= 10:
@@ -603,17 +617,20 @@ def score_financials(fin: dict, event: dict) -> tuple[int, dict]:
         score += pts
         detail["EPSサプライズ"] = pts
 
-    return score, detail
+    return score, evaluated_max, detail
 
 
-def score_event_price(price: dict) -> tuple[int, dict]:
+def score_event_price(price: dict) -> tuple[int, int, dict]:
+    """戻り値: (獲得点, 採点できた項目の満点合計, 内訳detail)"""
     score = 0
+    evaluated_max = 0
     detail = {}
 
     # ⑦ 決算反応 10点
     x = price["reaction_change"]
 
     if not pd.isna(x):
+        evaluated_max += 10
         if x >= 10:
             pts = 10
         elif x >= 7:
@@ -634,6 +651,7 @@ def score_event_price(price: dict) -> tuple[int, dict]:
     x = price["reaction_volume_ratio"]
 
     if not pd.isna(x):
+        evaluated_max += 5
         if x >= 3:
             pts = 5
         elif x >= 2:
@@ -646,30 +664,36 @@ def score_event_price(price: dict) -> tuple[int, dict]:
         score += pts
         detail["決算反応出来高"] = pts
 
-    return score, detail
+    return score, evaluated_max, detail
 
 
-def score_current_technical(price: dict, rs: float) -> tuple[int, dict]:
+def score_current_technical(price: dict, rs: float) -> tuple[int, int, dict]:
+    """戻り値: (獲得点, 採点できた項目の満点合計, 内訳detail)"""
     score = 0
+    evaluated_max = 0
     detail = {}
 
-    # ⑨ SMA25 3点
+    # ⑨ SMA25 3点（above_sma25はbool固定値なので常に採点可能）
+    evaluated_max += 3
     if price["above_sma25"]:
         score += 3
         detail["SMA25"] = 3
 
     # ⑩ 20日高値 4点
+    evaluated_max += 4
     if price["breakout20"]:
         score += 4
         detail["20日高値"] = 4
 
     # ⑪ 52週高値 2点
+    evaluated_max += 2
     if price["near_52w_high"]:
         score += 2
         detail["52週高値"] = 2
 
     # ⑫ RS風 6点
     if not pd.isna(rs):
+        evaluated_max += 6
         if rs >= 30:
             pts = 6
         elif rs >= 20:
@@ -684,7 +708,7 @@ def score_current_technical(price: dict, rs: float) -> tuple[int, dict]:
         score += pts
         detail["RS風"] = pts
 
-    return score, detail
+    return score, evaluated_max, detail
 
 
 # =========================================================
@@ -776,15 +800,47 @@ def analyze_one(
         price = price_metrics(dfd, event)
         rs = calculate_rs(dfd)
 
-        fin_score, fin_detail = score_financials(
+        FIN_CAT_MAX  = 70   # 業績カテゴリの満点
+        EVENT_CAT_MAX = 15  # 決算イベント株価反応カテゴリの満点
+        TECH_CAT_MAX  = 15  # 現在テクニカルカテゴリの満点
+
+        fin_raw, fin_eval_max, fin_detail = score_financials(
             fin, event
         )
-        event_score, event_detail = score_event_price(
+        event_raw, event_eval_max, event_detail = score_event_price(
             price
         )
-        tech_score, tech_detail = score_current_technical(
+        tech_raw, tech_eval_max, tech_detail = score_current_technical(
             price, rs
         )
+
+        def normalize(raw: int, eval_max: int, cat_max: int) -> float:
+            """
+            カテゴリの正規化スコアを返す。
+            「採点できた範囲でどれだけ良かったか」で評価しつつ、
+            採点できた項目が少ない（＝データが薄い）ほど、その評価の
+            信頼度を平方根で緩やかに割り引く。
+            例: 満点70点のカテゴリで10点分しか採点できなかった場合、
+                その10点満点を取っても「70点満点中26.5点」に留まる
+                （0点扱いにもせず、満点扱いもしない中間的な評価）。
+            全項目が採点できていれば(eval_max == cat_max)、
+            信頼度は1.0になり、これまでと同じ素点評価になる。
+            """
+            if eval_max <= 0:
+                return 0.0
+            coverage_ratio = eval_max / cat_max
+            raw_normalized = raw / eval_max * cat_max
+            confidence = coverage_ratio ** 0.5
+            return raw_normalized * confidence
+
+        fin_score   = normalize(fin_raw,   fin_eval_max,   FIN_CAT_MAX)
+        event_score = normalize(event_raw, event_eval_max, EVENT_CAT_MAX)
+        tech_score  = normalize(tech_raw,  tech_eval_max,  TECH_CAT_MAX)
+
+        # データ充足率（全項目の満点合計に対する、実際に採点できた満点合計の割合）
+        total_cat_max = FIN_CAT_MAX + EVENT_CAT_MAX + TECH_CAT_MAX
+        total_eval_max = fin_eval_max + event_eval_max + tech_eval_max
+        data_coverage = round(total_eval_max / total_cat_max * 100, 0)
 
         # 厳密に100点
         # 業績70 + 決算イベント15 + 現在テクニカル15
@@ -793,7 +849,7 @@ def analyze_one(
                 0,
                 min(
                     100,
-                    fin_score + event_score + tech_score
+                    round(fin_score + event_score + tech_score),
                 ),
             )
         )
@@ -929,9 +985,10 @@ def analyze_one(
                 else np.nan
             ),
 
-            "業績点": fin_score,
-            "決算イベント点": event_score,
-            "現在テクニカル点": tech_score,
+            "業績点": round(fin_score),
+            "決算イベント点": round(event_score),
+            "現在テクニカル点": round(tech_score),
+            "データ充足率%": int(data_coverage),
 
             "スコア": score,
             "ランク": rnk,

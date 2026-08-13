@@ -662,7 +662,8 @@ def render_momentum_tab():
     for col in [
         "スコア", "決算後騰落率%", "売上成長%", "営業利益成長%",
         "EPS/純利益成長%", "営業利益率%", "EPSサプライズ%",
-        "決算反応出来高倍率", "現在出来高倍率", "20日騰落率%", "RS風", "業績点", "決算イベント点", "現在テクニカル点"
+        "決算反応出来高倍率", "現在出来高倍率", "20日騰落率%", "RS風",
+        "業績点", "決算イベント点", "現在テクニカル点", "データ充足率%"
     ]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -706,7 +707,7 @@ def render_momentum_tab():
     st.caption(f"該当 {len(out)} 銘柄　｜　S+ / S / Aを優先して表示")
 
     cols = [
-        "順位", "証券コード", "銘柄名", "決算日", "スコア", "ランク", "シグナル",
+        "順位", "証券コード", "銘柄名", "決算日", "スコア", "データ充足率%", "ランク", "シグナル",
         "決算後騰落率%", "決算反応日", "決算後経過営業日", "売上成長%", "営業利益成長%", "EPS/純利益成長%",
         "成長加速", "EPSサプライズ%", "決算反応出来高倍率", "現在出来高倍率", "SMA25上",
         "20日高値更新", "52週高値接近", "RS風"
@@ -756,13 +757,15 @@ def render_momentum_tab():
     tp1 = entry * 1.15 if not pd.isna(entry) else np.nan
     tp2 = entry * 1.25 if not pd.isna(entry) else np.nan
 
-    m = st.columns(6)
+    m = st.columns(7)
     m[0].metric("スコア", f"{float(row['スコア']):.0f}")
-    m[1].metric("ランク", str(row.get("ランク", "-")))
-    m[2].metric("シグナル", str(row.get("シグナル", "-")))
-    m[3].metric("決算後", f"{float(row['決算後騰落率%']):+.1f}%" if not pd.isna(row.get("決算後騰落率%")) else "-")
-    m[4].metric("出来高", f"{float(row['決算反応出来高倍率']):.2f}倍" if not pd.isna(row.get("決算反応出来高倍率")) else "-")
-    m[5].metric("RS風", f"{float(row['RS風']):.1f}" if not pd.isna(row.get("RS風")) else "-")
+    m[1].metric("データ充足率", f"{float(row['データ充足率%']):.0f}%" if not pd.isna(row.get("データ充足率%")) else "-",
+                help="決算・株価データのうち、実際に採点できた割合。低いほどスコアの信頼度は低めに見てください。")
+    m[2].metric("ランク", str(row.get("ランク", "-")))
+    m[3].metric("シグナル", str(row.get("シグナル", "-")))
+    m[4].metric("決算後", f"{float(row['決算後騰落率%']):+.1f}%" if not pd.isna(row.get("決算後騰落率%")) else "-")
+    m[5].metric("出来高", f"{float(row['決算反応出来高倍率']):.2f}倍" if not pd.isna(row.get("決算反応出来高倍率")) else "-")
+    m[6].metric("RS風", f"{float(row['RS風']):.1f}" if not pd.isna(row.get("RS風")) else "-")
 
     p1, p2, p3, p4 = st.columns(4)
     p1.metric("現在値", f"¥{entry:,.0f}" if not pd.isna(entry) else "-")
