@@ -24,12 +24,14 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import gspread
+
+from momentum import build_momentum_results, MOMENTUM_VERSION
 from google.oauth2.service_account import Credentials
 
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-07-11-v8-pattern-G"
+SCAN_PY_VERSION = "2026-08-13-v10-momentum-optimized"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -896,6 +898,7 @@ def enrich_with_fundamentals(df: pd.DataFrame, name_map: dict | None = None,
 # ==========================================
 def process_batch(batch: list, ctr: dict, min_turnover, min_mktcap) -> tuple:
     ra, rb1, rb2, rc, rd, re_, rf, rg = [], [], [], [], [], [], [], []
+    rm_candidates = []  # 決算モメンタム候補（業績取得前の軽量プレフィルター）
     cache_w, _ = download_batch(batch, "3y", "1wk", "週足")
     cache_d, _ = download_batch(batch, "2y", "1d",  "日足")
 
@@ -926,6 +929,42 @@ def process_batch(batch: list, ctr: dict, min_turnover, min_mktcap) -> tuple:
 
             mktcap_oku = round(mc / 1e8, 0)
             avg_to_oku = round(avg_to / 1e8, 2)
+
+            # ── 決算モメンタム候補の軽量プレフィルター ──
+            # 4,000銘柄すべてに四半期財務データを取りに行くと遅くなるため、
+            # まず株価・出来高の勢いがある銘柄だけを候補として残す。
+            # 最終的な決算判定は momentum.py で行う。
+            try:
+                recent = tmp.copy()
+                recent["MA25_M"] = recent["Close"].rolling(25).mean()
+                recent["VOL20_M"] = recent["Volume"].rolling(20).mean()
+                if len(recent) >= 30:
+                    last = recent.iloc[-1]
+                    close_m = float(last["Close"])
+                    ma25_m = float(last["MA25_M"])
+                    vol20_m = float(last["VOL20_M"])
+                    ret5_m = ((close_m / float(recent["Close"].iloc[-6])) - 1) * 100
+                    ret20_m = ((close_m / float(recent["Close"].iloc[-21])) - 1) * 100
+                    vol_ratio_m = float(last["Volume"]) / vol20_m if vol20_m > 0 else 0
+                    high52_m = float(recent["High"].tail(252).max()) if "High" in recent.columns else close_m
+                    near_high_m = close_m >= high52_m * 0.90 if high52_m > 0 else False
+                    prefilter_score = 0
+                    if close_m > ma25_m: prefilter_score += 2
+                    if ret5_m >= 3: prefilter_score += 2
+                    if ret20_m >= 5: prefilter_score += 2
+                    if vol_ratio_m >= 1.5: prefilter_score += 2
+                    if near_high_m: prefilter_score += 2
+                    if prefilter_score >= 4:
+                        rm_candidates.append({
+                            "ticker": ticker,
+                            "code": code,
+                            "avg_to": avg_to_oku,
+                            "mktcap": mktcap_oku,
+                            "prefilter_score": prefilter_score,
+                            "dfd": tmp,   # 取得済みの日足データを持ち回り、後で再取得しない
+                        })
+            except Exception:
+                pass
 
             dfw_calc = None
             dfw = cache_w.get(ticker)
@@ -992,7 +1031,7 @@ def process_batch(batch: list, ctr: dict, min_turnover, min_mktcap) -> tuple:
         except Exception:
             pass
 
-    return ra, rb1, rb2, rc, rd, re_, rf, rg
+    return ra, rb1, rb2, rc, rd, re_, rf, rg, rm_candidates
 
 
 def format_a(rows):
@@ -1356,6 +1395,7 @@ def main():
     print(f"バッチ数: {total}", flush=True)
 
     all_a, all_b1, all_b2, all_c, all_d, all_e, all_f, all_g = [], [], [], [], [], [], [], []
+    all_m_candidates = []
     ctr = {}
     t0 = time.time()
 
@@ -1365,10 +1405,11 @@ def main():
         completed = 0
         for future in as_completed(futures):
             try:
-                ra, rb1, rb2, rc, rd, re_, rf, rg = future.result()
+                ra, rb1, rb2, rc, rd, re_, rf, rg, rm_candidates = future.result()
                 all_a.extend(ra); all_b1.extend(rb1); all_b2.extend(rb2)
                 all_c.extend(rc); all_d.extend(rd); all_e.extend(re_)
                 all_f.extend(rf); all_g.extend(rg)
+                all_m_candidates.extend(rm_candidates)
             except Exception as e:
                 print(f"バッチエラー: {e}", flush=True)
             completed += 1
@@ -1441,6 +1482,32 @@ def main():
 
     dfm = build_multi_hit(dfa, dfb1, dfb2, dfc, dfd, dfe, dff, dfg)
 
+    # ── 決算モメンタム分析 ───────────────────────────────
+    # 軽量プレフィルター上位のみを yfinance の四半期決算データへ回す。
+    # 日足データは既に cache_d にあるため、ここでは再取得しない。
+    print(f"決算モメンタム候補の事前抽出: {len(all_m_candidates)}件", flush=True)
+    momentum_candidates = []
+    seen_m = set()
+    for c in sorted(all_m_candidates, key=lambda x: (x.get("prefilter_score", 0), x.get("avg_to", 0)), reverse=True):
+        t = c["ticker"]
+        if t in seen_m:
+            continue
+        seen_m.add(t)
+        # 上位候補だけに限定して分析対象にする
+        if len(momentum_candidates) >= 180:
+            break
+        # process_batchで取得済みの日足データ(dfd)を再利用する（yf.downloadの再取得を回避）
+        dfx = c.get("dfd")
+        if dfx is not None and not dfx.empty and "Close" in dfx.columns:
+            momentum_candidates.append((t, c["code"], name_map.get(t, ""), dfx))
+
+    print(f"決算モメンタム分析開始: {len(momentum_candidates)}件 / version={MOMENTUM_VERSION}", flush=True)
+    df_momentum = build_momentum_results(momentum_candidates, max_workers=4)
+    if not df_momentum.empty:
+        print(f"決算モメンタム結果: {len(df_momentum)}件", flush=True)
+    else:
+        print("決算モメンタム結果: 0件", flush=True)
+
     # ── スプレッドシートへ書き込み ──
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     if not spreadsheet_id:
@@ -1467,6 +1534,7 @@ def main():
 
     print("Googleスプレッドシートへ書き込み中...", flush=True)
     write_df_to_sheet(gc, spreadsheet_id, "複数パターン合致", dfm)
+    write_df_to_sheet(gc, spreadsheet_id, "決算モメンタム", df_momentum)
     write_df_to_sheet(gc, spreadsheet_id, "週足パターンA",     dfa)
     write_df_to_sheet(gc, spreadsheet_id, "日足B1押し目待ち",   dfb1)
     write_df_to_sheet(gc, spreadsheet_id, "日足B2反発エントリー", dfb2)

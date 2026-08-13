@@ -389,7 +389,7 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
     # 行選択イベント付きのテーブル
     event = st.dataframe(
         table_data,
-        use_container_width=True,
+        width='stretch',
         height=460,
         on_select="rerun",
         selection_mode="single-row",
@@ -449,12 +449,12 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
                 is_fav = ticker in wl_tickers
                 if is_fav:
                     if st.button("⭐ 解除", key=f"unfav_{sheet_name}",
-                                use_container_width=True):
+                                width='stretch'):
                         remove_from_watchlist(ticker)
                         st.rerun()
                 else:
                     if st.button("☆ お気に入り登録", key=f"fav_{sheet_name}",
-                                use_container_width=True):
+                                width='stretch'):
                         add_to_watchlist(code, ticker, name)
                         st.rerun()
             period_map = {"3ヶ月": "3mo", "6ヶ月": "6mo", "1年": "1y", "2年": "2y"}
@@ -466,7 +466,7 @@ def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
                 st.error(f"{ticker} のデータを取得できませんでした。")
             else:
                 fig = build_chart(chart_df, ticker, name)
-                st.plotly_chart(fig, use_container_width=True,
+                st.plotly_chart(fig, width='stretch',
                                 key=f"plot_{sheet_name}")
 
                 latest = chart_df.iloc[-1]
@@ -598,7 +598,7 @@ with st.sidebar:
                            help="「前回抽出日」が初回の銘柄だけに絞り込みます")
 
     st.divider()
-    if st.button("🔄 最新の結果を再取得", key="btn_refresh", use_container_width=True):
+    if st.button("🔄 最新の結果を再取得", key="btn_refresh", width='stretch'):
         load_sheet.clear()
         st.rerun()
     st.caption("結果は5分間キャッシュされます。スキャン直後はこのボタンで更新してください。")
@@ -607,7 +607,7 @@ with st.sidebar:
     st.header("▶️ 手動スキャン")
     st.caption("GitHub Actionsのスキャンを今すぐ起動します。全銘柄スキャンは完了まで10分前後かかります。")
 
-    if st.button("🚀 スキャンを今すぐ実行", key="btn_run_scan", use_container_width=True,
+    if st.button("🚀 スキャンを今すぐ実行", key="btn_run_scan", width='stretch',
                  type="primary"):
         ok, msg = trigger_github_workflow()
         if ok:
@@ -645,6 +645,141 @@ with st.sidebar:
     )
 
 # ==========================================
+# 決算モメンタムタブ
+# ==========================================
+def render_momentum_tab():
+    st.subheader("🔥 決算モメンタムランキング")
+    st.caption(
+        "決算内容 × 決算後の株価反応 × 出来高 × SMA25 × 高値更新 × RS風指標を "
+        "100点満点で評価します。現在は追加課金なしのyfinance版です。"
+    )
+
+    df = load_sheet("決算モメンタム")
+    if df.empty or "該当銘柄なし" in df.columns:
+        st.info("決算モメンタムの該当銘柄はありません。まずGitHub Actionsのスキャンを実行してください。")
+        return
+
+    # 数値化
+    for col in [
+        "スコア", "決算後騰落率%", "売上成長%", "営業利益成長%",
+        "EPS/純利益成長%", "営業利益率%", "EPSサプライズ%",
+        "出来高倍率", "20日騰落率%", "RS風", "業績点", "株価点"
+    ]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # フィルター
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        min_score = st.slider("最低スコア", 0, 100, 60, 5, key="mom_min_score")
+    with f2:
+        signal = st.selectbox(
+            "シグナル",
+            ["すべて", "🔥 BUY", "🟢 BUY", "🟡 WATCH", "🔴 AVOID"],
+            key="mom_signal"
+        )
+    with f3:
+        rank = st.selectbox(
+            "ランク",
+            ["すべて", "S+", "S", "A", "B", "C"],
+            key="mom_rank"
+        )
+    with f4:
+        recent_only = st.checkbox(
+            "決算後+3%以上のみ",
+            value=False,
+            key="mom_recent_only"
+        )
+
+    out = df[df["スコア"].fillna(0) >= min_score].copy()
+    if signal != "すべて" and "シグナル" in out.columns:
+        out = out[out["シグナル"] == signal]
+    if rank != "すべて" and "ランク" in out.columns:
+        out = out[out["ランク"] == rank]
+    if recent_only and "決算後騰落率%" in out.columns:
+        out = out[out["決算後騰落率%"].fillna(-999) >= 3]
+
+    st.caption(f"該当 {len(out)} 銘柄　｜　S+ / S / Aを優先して表示")
+
+    cols = [
+        "順位", "証券コード", "銘柄名", "決算日", "スコア", "ランク", "シグナル",
+        "決算後騰落率%", "売上成長%", "営業利益成長%", "EPS/純利益成長%",
+        "成長加速", "EPSサプライズ%", "出来高倍率", "SMA25上",
+        "20日高値更新", "52週高値接近", "RS風"
+    ]
+    cols = [c for c in cols if c in out.columns]
+    st.dataframe(
+        out[cols].reset_index(drop=True),
+        width='stretch',
+        height=520,
+        hide_index=True,
+    )
+
+    csv = out.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+    st.download_button(
+        "📥 決算モメンタムCSV",
+        data=csv,
+        file_name="決算モメンタム.csv",
+        mime="text/csv",
+        key="dl_momentum",
+    )
+
+    if out.empty:
+        return
+
+    st.divider()
+    st.subheader("🎯 選択銘柄の売買ルール目安")
+
+    labels = []
+    for _, r in out.head(100).iterrows():
+        code = str(r.get("証券コード", ""))
+        name = str(r.get("銘柄名", ""))
+        labels.append(f"{code}　{name}".strip())
+
+    selected = st.selectbox("銘柄を選択", labels, key="momentum_selected")
+    selected_code = selected.split("　")[0].strip()
+    row = out[out["証券コード"].astype(str) == selected_code].iloc[0]
+
+    # 現在値はチャートから取得
+    ticker = str(row.get("Ticker", "")).strip()
+    chart_df = fetch_chart_data(ticker, period="6mo") if ticker else pd.DataFrame()
+
+    current_price = np.nan
+    if not chart_df.empty:
+        current_price = float(chart_df["Close"].iloc[-1])
+
+    entry = current_price
+    stop = entry * 0.93 if not pd.isna(entry) else np.nan
+    tp1 = entry * 1.15 if not pd.isna(entry) else np.nan
+    tp2 = entry * 1.25 if not pd.isna(entry) else np.nan
+
+    m = st.columns(6)
+    m[0].metric("スコア", f"{float(row['スコア']):.0f}")
+    m[1].metric("ランク", str(row.get("ランク", "-")))
+    m[2].metric("シグナル", str(row.get("シグナル", "-")))
+    m[3].metric("決算後", f"{float(row['決算後騰落率%']):+.1f}%" if not pd.isna(row.get("決算後騰落率%")) else "-")
+    m[4].metric("出来高", f"{float(row['出来高倍率']):.2f}倍" if not pd.isna(row.get("出来高倍率")) else "-")
+    m[5].metric("RS風", f"{float(row['RS風']):.1f}" if not pd.isna(row.get("RS風")) else "-")
+
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("現在値", f"¥{entry:,.0f}" if not pd.isna(entry) else "-")
+    p2.metric("損切り目安 -7%", f"¥{stop:,.0f}" if not pd.isna(stop) else "-")
+    p3.metric("利確① +15%", f"¥{tp1:,.0f}" if not pd.isna(tp1) else "-")
+    p4.metric("利確② +25%", f"¥{tp2:,.0f}" if not pd.isna(tp2) else "-")
+
+    st.markdown(
+        "**基本ルール:** 決算後+3%以上・出来高1.5倍以上・SMA25上を通常BUY条件、"
+        "決算後+7%以上・出来高2倍以上・20日高値更新を強力BUY条件として表示しています。"
+        "寄り付きへの飛びつきではなく、押し目を待つ前提です。"
+    )
+
+    if not chart_df.empty:
+        name = str(row.get("銘柄名", ""))
+        fig = build_chart(chart_df, ticker, name)
+        st.plotly_chart(fig, width='stretch', key="momentum_chart")
+
+
+# ==========================================
 # ヘッダー & サマリーカード
 # ==========================================
 st.title("📈 日本株スクリーナー")
@@ -656,7 +791,7 @@ if not log_df.empty:
                f"対象 {last.get('対象銘柄数', '-')} 銘柄　|　"
                f"トリガー: {last.get('トリガー種別', '-')}")
 
-    m = st.columns(9)
+    m = st.columns(10)
     m[0].metric("⭐ 複数合致",  last.get("複数合致件数", "-"))
     m[1].metric("週足A",        last.get("週足A件数", "-"))
     m[2].metric("日足B1 押し目", last.get("日足B1件数", "-"))
@@ -666,6 +801,7 @@ if not log_df.empty:
     m[6].metric("出来高E",       last.get("出来高E件数", "-"))
     m[7].metric("GC底打ちF",     last.get("GC底打ちF件数", "-"))
     m[8].metric("ポケピG",       last.get("ポケピG件数", "-"))
+    m[9].metric("決算モメンタム", last.get("決算モメンタム件数", "-"))
 else:
     st.warning("実行ログが見つかりません。GitHub Actionsがまだ一度も実行されていない可能性があります。")
 
@@ -676,6 +812,7 @@ st.divider()
 # ==========================================
 tabs = st.tabs([
     "⭐ 複数合致",
+    "🔥 決算モメンタム",
     "週足A",
     "B1 押し目🟡",
     "B2 反発🚀",
@@ -690,14 +827,14 @@ tabs = st.tabs([
 
 sheet_map = [
     (tabs[0], "複数パターン合致",             "複数パターン合致"),
-    (tabs[1], "週足パターンA（長期）",         "週足パターンA"),
-    (tabs[2], "日足B1 押し目待ち",             "日足B1押し目待ち"),
-    (tabs[3], "日足B2 反発エントリー",         "日足B2反発エントリー"),
-    (tabs[4], "ボリンジャーバンド +2σ ブレイク", "ボリバンCブレイク"),
-    (tabs[5], "初押し・SMA25タッチ 下ひげ陽線", "初押しD下ひげ陽線"),
-    (tabs[6], "揉み合い後の出来高急増ブレイク",   "出来高E急増ブレイク"),
-    (tabs[7], "21MA×200MA ゴールデンクロス（底打ち）", "GC底打ちF21x200"),
-    (tabs[8], "ポケットピボット（オニール系）", "ポケットピボットG"),
+    (tabs[2], "週足パターンA（長期）",         "週足パターンA"),
+    (tabs[3], "日足B1 押し目待ち",             "日足B1押し目待ち"),
+    (tabs[4], "日足B2 反発エントリー",         "日足B2反発エントリー"),
+    (tabs[5], "ボリンジャーバンド +2σ ブレイク", "ボリバンCブレイク"),
+    (tabs[6], "初押し・SMA25タッチ 下ひげ陽線", "初押しD下ひげ陽線"),
+    (tabs[7], "揉み合い後の出来高急増ブレイク",   "出来高E急増ブレイク"),
+    (tabs[8], "21MA×200MA ゴールデンクロス（底打ち）", "GC底打ちF21x200"),
+    (tabs[9], "ポケットピボット（オニール系）", "ポケットピボットG"),
 ]
 
 for tab, title, sheet_name in sheet_map:
@@ -705,9 +842,15 @@ for tab, title, sheet_name in sheet_map:
         render_sheet_tab(title, sheet_name, query, first_only)
 
 # ==========================================
+# 決算モメンタム
+# ==========================================
+with tabs[1]:
+    render_momentum_tab()
+
+# ==========================================
 # ウォッチリストタブ
 # ==========================================
-with tabs[9]:
+with tabs[10]:
     st.subheader("🌟 ウォッチリスト（お気に入り銘柄）")
     st.caption(
         "各タブの銘柄をクリック→「☆ お気に入り登録」で追加できます。"
@@ -722,7 +865,7 @@ with tabs[9]:
         wl_disp = wl.reset_index(drop=True)
         event_wl = st.dataframe(
             wl_disp,
-            use_container_width=True,
+            width='stretch',
             on_select="rerun",
             selection_mode="single-row",
             key="table_watchlist",
@@ -741,7 +884,7 @@ with tabs[9]:
             sel_name   = str(sel_row.get("銘柄名", ""))
             with del_col1:
                 if st.button(f"🗑️ 削除", key="btn_remove_watchlist",
-                            use_container_width=True):
+                            width='stretch'):
                     remove_from_watchlist(sel_ticker)
                     st.rerun()
             with del_col2:
@@ -758,7 +901,7 @@ with tabs[9]:
                 chart_df_wl = fetch_chart_data(sel_ticker, period=period_map[period_label_wl])
             if not chart_df_wl.empty:
                 fig_wl = build_chart(chart_df_wl, sel_ticker, sel_name)
-                st.plotly_chart(fig_wl, use_container_width=True, key="plot_watchlist")
+                st.plotly_chart(fig_wl, width='stretch', key="plot_watchlist")
 
         # TradingView用の一括エクスポートもここで
         tv_txt_wl = to_tradingview_txt(wl)
@@ -774,7 +917,7 @@ with tabs[9]:
 # ==========================================
 # チャートタブ
 # ==========================================
-with tabs[10]:
+with tabs[11]:
     left_col, right_col = st.columns([1, 3])
 
     with left_col:
@@ -782,6 +925,7 @@ with tabs[10]:
 
         source_options = {
             "⭐ 複数パターン合致": "複数パターン合致",
+            "🔥 決算モメンタム": "決算モメンタム",
             "週足パターンA":       "週足パターンA",
             "日足B1 押し目待ち":   "日足B1押し目待ち",
             "日足B2 反発エントリー": "日足B2反発エントリー",
@@ -830,7 +974,7 @@ with tabs[10]:
             # ── 前へ / 次へ ボタン ──
             nav_prev, nav_pos, nav_next = st.columns([1, 1, 1])
             with nav_prev:
-                if st.button("◀ 前へ", key="chart_prev", use_container_width=True,
+                if st.button("◀ 前へ", key="chart_prev", width='stretch',
                              disabled=(idx <= 0)):
                     st.session_state["chart_idx"] = idx - 1
                     st.rerun()
@@ -841,7 +985,7 @@ with tabs[10]:
                     unsafe_allow_html=True,
                 )
             with nav_next:
-                if st.button("次へ ▶", key="chart_next", use_container_width=True,
+                if st.button("次へ ▶", key="chart_next", width='stretch',
                              disabled=(idx >= n_opts - 1)):
                     st.session_state["chart_idx"] = idx + 1
                     st.rerun()
@@ -888,7 +1032,7 @@ with tabs[10]:
                 st.error(f"{selected_ticker} のデータを取得できませんでした。")
             else:
                 fig = build_chart(chart_df, selected_ticker, company_name)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
                 latest = chart_df.iloc[-1]
                 prev   = chart_df.iloc[-2] if len(chart_df) >= 2 else latest
