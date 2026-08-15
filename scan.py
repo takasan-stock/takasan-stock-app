@@ -31,7 +31,7 @@ from google.oauth2.service_account import Credentials
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-08-15-v12-patternA-breakout"
+SCAN_PY_VERSION = "2026-08-15-v13-patternA-base-required"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -49,9 +49,17 @@ BAND40_PCT = 0.05
 
 # ── パターンA: 長期下落からの底打ち・40週MA上抜け初動 ──────
 A_DECLINE_MIN    = -1.5  # 過去に「明確な下落」とみなす40週MA傾き%(4週)
-A_SLOPE_NOW_MIN  = -2.0  # 現在の40週MA傾きの下限（横ばいまで許容）
+A_SLOPE_NOW_MIN  = -1.0  # 現在の40週MA傾きの下限。ほぼ横ばい化していることを要求
+                         # （V字反発では40週MAがまだ明確に下向きのため、ここで除外される）
 A_SLOPE_IMPROVE  = 0.5   # 過去の傾きからの改善幅（下げ止まりの証拠）
 A_CROSS_WEEKS    = 10    # 40週MAを上抜けてから何週以内を「初動」とみなすか
+
+# ── ベース形成（V字反発の除外）──────────────────────────
+# 上抜け直前に「底値圏で横ばい（ベース）」を作っていたかを見る。
+# V字反発は直前に急落を含むためレンジが広くなり、ここで除外される。
+A_BASE_WEEKS     = 16    # 上抜け直前の何週をベース期間として見るか
+A_BASE_RANGE_MAX = 1.35  # ベース期間の(高値÷安値)の上限。これを超えると「ベースでなくV字」
+A_WEEKS_FROM_LOW = 8     # 直近の最安値をつけてから最低何週経過している必要があるか
 A_MAX_EXTENDED   = 25.0  # 終値が40週MAから何%以上離れたら「初動でない」として除外
 A_RSI_MIN        = 40.0  # 底打ち初動のRSI下限（弱い反発を除外）
 A_RSI_MAX        = 85.0  # RSI上限は安全弁のみ。上抜け初動はRSIが高く出るのが自然なため広め
@@ -360,6 +368,7 @@ def check_a(df: pd.DataFrame, ctr: dict) -> dict | None:
     # ══════════════════════════════════════════════════
     breakout_ok = False
     weeks_since_cross = None
+    cross_pos = None
 
     if close > ma40:
         # 直近A_CROSS_WEEKS週以内に「終値が40週MA以下」だった週があるか
@@ -369,9 +378,27 @@ def check_a(df: pd.DataFrame, ctr: dict) -> dict | None:
             weeks_since_cross = int(
                 (rec.index[-1] - below.index[-1]).days / 7
             )
+            cross_pos = rec.index.get_loc(below.index[-1])
             breakout_ok = True
 
     if breakout_ok:
+        # ── ③ ベース形成（V字反発の除外）─────────────────
+        # 上抜け直前 A_BASE_WEEKS 週のレンジが狭いこと＝底で揉み合っていたこと。
+        # 急落直後のV字反発は、この期間に急落を含むためレンジが広くなり除外される。
+        base = rec.iloc[max(0, cross_pos - A_BASE_WEEKS + 1): cross_pos + 1]
+        if len(base) >= 8:
+            base_high = float(base["High"].max())
+            base_low  = float(base["Low"].min())
+            if base_low > 0 and (base_high / base_low) > A_BASE_RANGE_MAX:
+                return drop("A_[初動]③ベース未形成(V字反発)")
+
+        # ── ③ 底値から一定期間が経過していること（V字の追加除外）──
+        low_win = rec.iloc[-40:]
+        low_idx = low_win["Low"].idxmin()
+        weeks_from_low = int((rec.index[-1] - low_idx).days / 7)
+        if weeks_from_low < A_WEEKS_FROM_LOW:
+            return drop("A_[初動]③底値から日が浅い(V字反発)")
+
         if ma5_slope <= 0:
             return drop("A_[初動]④5週MA上向きでない")
         if close < ma5:
