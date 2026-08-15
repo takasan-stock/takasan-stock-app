@@ -31,7 +31,7 @@ from google.oauth2.service_account import Credentials
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-08-13-v11-nan-safe-sheet"
+SCAN_PY_VERSION = "2026-08-15-v12-patternA-breakout"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -46,6 +46,16 @@ def now_jst() -> datetime.datetime:
 # ==========================================
 BAND5_PCT  = 0.025
 BAND40_PCT = 0.05
+
+# ── パターンA: 長期下落からの底打ち・40週MA上抜け初動 ──────
+A_DECLINE_MIN    = -1.5  # 過去に「明確な下落」とみなす40週MA傾き%(4週)
+A_SLOPE_NOW_MIN  = -2.0  # 現在の40週MA傾きの下限（横ばいまで許容）
+A_SLOPE_IMPROVE  = 0.5   # 過去の傾きからの改善幅（下げ止まりの証拠）
+A_CROSS_WEEKS    = 10    # 40週MAを上抜けてから何週以内を「初動」とみなすか
+A_MAX_EXTENDED   = 25.0  # 終値が40週MAから何%以上離れたら「初動でない」として除外
+A_RSI_MIN        = 40.0  # 底打ち初動のRSI下限（弱い反発を除外）
+A_RSI_MAX        = 85.0  # RSI上限は安全弁のみ。上抜け初動はRSIが高く出るのが自然なため広め
+                         # （行き過ぎの抑制は A_MAX_EXTENDED が担当する）
 BAND21_PCT = 0.025
 BAND50_PCT = 0.04
 
@@ -277,6 +287,7 @@ def calc_weekly(df: pd.DataFrame) -> pd.DataFrame:
     df["MA40_s8_prev"] = df["MA40_s8"].shift(4)
     df["WMA20_s4"]     = df["WMA20"].pct_change(4) * 100  # 週足20SMAの傾き
     df["MA40_s4b"]     = df["MA40"].pct_change(4) * 100   # 週足40SMAの傾き（別名）
+    df["MA5_s4"]       = df["MA5"].pct_change(4) * 100    # 週足5SMAの傾き（パターンA底打ち用）
     return df
 
 def calc_daily(df: pd.DataFrame) -> pd.DataFrame:
@@ -302,37 +313,116 @@ def calc_daily(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def check_a(df: pd.DataFrame, ctr: dict) -> dict | None:
+    """
+    パターンA:「長期下落からの底打ち → 40週MA上抜けの初動」
+    ══════════════════════════════════════════════════════════
+    ① 長期下落の実績: 過去60週で40週MAの傾きが A_DECLINE_MIN 未満だった週がある
+    ② 下げ止まり   : 40週MAの傾きが「下向き → 横ばい」に転換
+                     （現在の傾き >= A_SLOPE_NOW_MIN、かつ過去より改善）
+    ③ 上抜け初動   : 終値が40週MAを上抜けており、その上抜けが
+                     直近 A_CROSS_WEEKS 週以内に起きたばかり
+    ④ 短期の反転   : 5週MAが上向き、かつ終値が5週MAより上
+    ⑤ 過熱でない   : 終値が40週MAから A_MAX_EXTENDED% 以上離れていない
+    ⑥ RSI         : A_RSI_MIN 〜 A_RSI_MAX
+
+    上記に当てはまらない場合でも、従来型の「上昇転換後の押し目」
+    （40週MAバンドまで押してGCを維持している形）は別状態として拾う。
+    ══════════════════════════════════════════════════════════
+    """
     def drop(k): ctr[k] = ctr.get(k, 0) + 1; return None
-    need = ["MA5","MA40","BAND5_U","BAND5_L","BAND40_U","BAND40_L","RSI","MA40_s4","MA40_s8_prev","Close","Low"]
+
+    need = ["MA5","MA40","BAND5_U","BAND5_L","BAND40_U","BAND40_L",
+            "RSI","MA40_s4","MA40_s8_prev","MA5_s4","Close","Low"]
     rec = df.dropna(subset=need).iloc[-60:]
     if len(rec) < 20: return drop("A_データ不足")
 
     cur = rec.iloc[-1]
-    close, low, ma5, ma40 = float(cur["Close"]), float(cur["Low"]), float(cur["MA5"]), float(cur["MA40"])
+    close, low = float(cur["Close"]), float(cur["Low"])
+    ma5, ma40  = float(cur["MA5"]), float(cur["MA40"])
     b5u, b40u, b40l = float(cur["BAND5_U"]), float(cur["BAND40_U"]), float(cur["BAND40_L"])
     s_now, s_old = float(cur["MA40_s4"]), float(cur["MA40_s8_prev"])
+    ma5_slope = float(cur["MA5_s4"])
+    rsi = float(cur["RSI"])
+    dist_close = (close - ma40) / ma40 * 100
 
-    if not (rec["MA40_s4"] < -1.5).any(): return drop("A_①下落実績なし")
-    if s_now < -1.5: return drop("A_②急落継続")
-    if not np.isnan(s_old) and s_now < s_old + 0.3: return drop("A_②改善なし")
+    # ── ① 長期下落の実績（両パターン共通の前提）──────────
+    if not (rec["MA40_s4"] < A_DECLINE_MIN).any():
+        return drop("A_①下落実績なし")
 
+    # ── ② 下げ止まり（40週MAが下向き→横ばいに転換）──────
+    if s_now < A_SLOPE_NOW_MIN:
+        return drop("A_②まだ下落継続")
+    if not np.isnan(s_old) and s_now < s_old + A_SLOPE_IMPROVE:
+        return drop("A_②改善なし")
+
+    # ══════════════════════════════════════════════════
+    # パターンA-1: 底打ち → 40週MA上抜けの初動（画像の形）
+    # ══════════════════════════════════════════════════
+    breakout_ok = False
+    weeks_since_cross = None
+
+    if close > ma40:
+        # 直近A_CROSS_WEEKS週以内に「終値が40週MA以下」だった週があるか
+        recent = rec.iloc[-(A_CROSS_WEEKS + 1):]
+        below = recent[recent["Close"] <= recent["MA40"]]
+        if not below.empty:
+            weeks_since_cross = int(
+                (rec.index[-1] - below.index[-1]).days / 7
+            )
+            breakout_ok = True
+
+    if breakout_ok:
+        if ma5_slope <= 0:
+            return drop("A_[初動]④5週MA上向きでない")
+        if close < ma5:
+            return drop("A_[初動]④終値が5週MA未満")
+        if dist_close > A_MAX_EXTENDED:
+            return drop("A_[初動]⑤上昇しすぎ(初動でない)")
+        if not (A_RSI_MIN <= rsi <= A_RSI_MAX):
+            return drop("A_[初動]⑥RSI範囲外")
+
+        ctr["A_合格"] = ctr.get("A_合格", 0) + 1
+        ctr["A_合格-底打ち上抜け"] = ctr.get("A_合格-底打ち上抜け", 0) + 1
+        return {
+            "status": "🚀上抜け初動",
+            "close": round(close, 0), "low": round(low, 0),
+            "ma5": round(ma5, 0), "ma40": round(ma40, 0),
+            "band40_u": round(b40u, 0), "band40_l": round(b40l, 0),
+            "dist_close": round(dist_close, 1),
+            "dist_low": round((low - ma40) / ma40 * 100, 1),
+            "slope_now": round(s_now, 2),
+            "slope_prev": round(s_old, 2) if not np.isnan(s_old) else 0.0,
+            "ma5_slope": round(ma5_slope, 2),
+            "rsi": round(rsi, 1),
+            "weeks_since_cross": weeks_since_cross if weeks_since_cross is not None else 0,
+        }
+
+    # ══════════════════════════════════════════════════
+    # パターンA-2: 上昇転換後の押し目（従来型）
+    # ══════════════════════════════════════════════════
     rec40 = df.dropna(subset=["MA5","MA40"]).iloc[-40:]
     gc_flag = (rec40["MA5"] > rec40["MA40"]).astype(int)
-    if not (gc_flag.rolling(2).min() == 1).any(): return drop("A_③GC実績なし")
-    if ma5 < ma40 * 0.97: return drop("A_③MA5大幅下抜け")
-    if not (b40l * 0.97 <= low <= b40u * 1.03): return drop("A_④安値バンド外")
-    if close < ma40 * 0.97: return drop("A_④終値MA40割れ")
-    if b5u <= b40l: return drop("A_④5SMAバンド潜り込み")
-
-    rsi = float(cur["RSI"])
-    if not (35 <= rsi <= 65): return drop("A_⑤RSI範囲外")
+    if not (gc_flag.rolling(2).min() == 1).any(): return drop("A_[押目]③GC実績なし")
+    if ma5 < ma40 * 0.97: return drop("A_[押目]③MA5大幅下抜け")
+    if not (b40l * 0.97 <= low <= b40u * 1.03): return drop("A_[押目]④安値バンド外")
+    if close < ma40 * 0.97: return drop("A_[押目]④終値MA40割れ")
+    if b5u <= b40l: return drop("A_[押目]④5SMAバンド潜り込み")
+    if not (35 <= rsi <= 65): return drop("A_[押目]⑤RSI範囲外")
 
     ctr["A_合格"] = ctr.get("A_合格", 0) + 1
+    ctr["A_合格-押し目"] = ctr.get("A_合格-押し目", 0) + 1
     return {
-        "close": round(close, 0), "low": round(low, 0), "ma5": round(ma5, 0), "ma40": round(ma40, 0),
-        "band40_u": round(b40u, 0), "band40_l": round(b40l, 0), "dist_close": round((close - ma40) / ma40 * 100, 1),
-        "dist_low": round((low - ma40) / ma40 * 100, 1), "slope_now": round(s_now, 2),
-        "slope_prev": round(s_old, 2) if not np.isnan(s_old) else 0.0, "rsi": round(rsi, 1),
+        "status": "🔄押し目",
+        "close": round(close, 0), "low": round(low, 0),
+        "ma5": round(ma5, 0), "ma40": round(ma40, 0),
+        "band40_u": round(b40u, 0), "band40_l": round(b40l, 0),
+        "dist_close": round(dist_close, 1),
+        "dist_low": round((low - ma40) / ma40 * 100, 1),
+        "slope_now": round(s_now, 2),
+        "slope_prev": round(s_old, 2) if not np.isnan(s_old) else 0.0,
+        "ma5_slope": round(ma5_slope, 2),
+        "rsi": round(rsi, 1),
+        "weeks_since_cross": 999,   # 押し目は上抜け直後ではないため大きい値
     }
 
 def check_b1(df: pd.DataFrame, ctr: dict) -> dict | None:
@@ -1036,9 +1126,15 @@ def process_batch(batch: list, ctr: dict, min_turnover, min_mktcap) -> tuple:
 
 def format_a(rows):
     if not rows: return pd.DataFrame()
-    d = pd.DataFrame(rows)[["code","ticker","close","low","ma5","ma40","band40_u","band40_l","dist_close","dist_low","slope_now","slope_prev","rsi","avg_to","mktcap"]]
-    d.columns = ["証券コード","Ticker","終値","安値","5週MA","40週MA","40BANDu","40BANDl","終値とMA40距離%","安値とMA40距離%","40MA傾き%(4週)","40MA傾き%(前期)","RSI","売買代金(億円)","時価総額(億円)"]
-    return d.sort_values("安値とMA40距離%", key=abs).reset_index(drop=True)
+    d = pd.DataFrame(rows)[["code","ticker","status","close","low","ma5","ma40","band40_u","band40_l",
+                            "dist_close","dist_low","slope_now","slope_prev","ma5_slope","rsi",
+                            "weeks_since_cross","avg_to","mktcap"]]
+    d.columns = ["証券コード","Ticker","状態","終値","安値","5週MA","40週MA","40BANDu","40BANDl",
+                 "終値とMA40距離%","安値とMA40距離%","40MA傾き%(4週)","40MA傾き%(前期)","5MA傾き%(4週)","RSI",
+                 "上抜けからの週数","売買代金(億円)","時価総額(億円)"]
+    # 上抜け初動（週数が浅いもの）を優先して上に並べる
+    return d.sort_values(["上抜けからの週数", "終値とMA40距離%"],
+                         ascending=[True, True]).reset_index(drop=True)
 
 def format_b1(rows):
     if not rows: return pd.DataFrame()
