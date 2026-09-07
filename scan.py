@@ -31,7 +31,7 @@ from google.oauth2.service_account import Credentials
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-08-15-v13-patternA-base-required"
+SCAN_PY_VERSION = "2026-09-07-v14-jpx-xlsx-fix"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -121,28 +121,29 @@ def get_jpx_tickers() -> tuple[list, dict, str]:
       - name_map: {Ticker: 日本語銘柄名} の辞書（JPX一覧から取得した正式な日本語社名）
       - diag    : 取得方法またはエラー内容
     """
-    url = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
+    # JPXは2026年8月頃、配布ファイル形式を .xls から .xlsx に変更した。
+    # 将来また変わる可能性があるため、両方の拡張子を順番に試す。
+    urls = [
+        "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx",
+        "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls",
+    ]
     df = None
     diag_steps = []
 
-    try:
-        df = pd.read_html(url, header=0)[0]
-        diag_steps.append("read_html: 成功")
-    except Exception as e:
-        diag_steps.append(f"read_html: 失敗 ({type(e).__name__}: {e})")
+    import requests, urllib3
+    from io import BytesIO
+    urllib3.disable_warnings()
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    if df is None:
+    for url in urls:
         try:
-            import requests, urllib3
-            from io import BytesIO
-            urllib3.disable_warnings()
-            headers = {"User-Agent": "Mozilla/5.0"}
             r = requests.get(url, verify=False, timeout=30, headers=headers)
             r.raise_for_status()
             df = pd.read_excel(BytesIO(r.content), header=0)
-            diag_steps.append("requests+read_excel: 成功")
+            diag_steps.append(f"requests+read_excel({url.split('.')[-1]}): 成功")
+            break
         except Exception as e:
-            diag_steps.append(f"requests+read_excel: 失敗 ({type(e).__name__}: {e})")
+            diag_steps.append(f"requests+read_excel({url.split('.')[-1]}): 失敗 ({type(e).__name__}: {e})")
 
     if df is None:
         diag = " | ".join(diag_steps)
