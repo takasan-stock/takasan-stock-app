@@ -47,3 +47,9 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: python safe_scan.py
+
+      - name: スクリーニング4系統サマリーと重複分析を作成
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: python category_review.py
