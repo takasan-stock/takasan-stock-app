@@ -1,0 +1,1055 @@
+"""
+============================================================
+日本株スクリーナー結果ビューア（表示専用）v2 - UI改善版
+============================================================
+このアプリ自体はスキャン処理を行わない。
+GitHub Actionsが定期実行した scan.py の結果を、
+Googleスプレッドシートから読み込んで表示するだけ。
+
+必要なStreamlit Secrets（Streamlit Cloud側の「Secrets」設定）:
+  [gcp_service_account]
+  （サービスアカウントJSONの中身をそのままTOML形式で貼る）
+  SPREADSHEET_ID = "..."
+============================================================
+"""
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import yfinance as yf
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import gspread
+from google.oauth2.service_account import Credentials
+
+st.set_page_config(
+    page_title="日本株スクリーナー",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ==========================================
+# カスタムCSS（デフォルト感を減らし密度を上げる）
+# ==========================================
+st.markdown("""
+<style>
+div[data-testid="stMetric"] {
+    background: #f8f9fb;
+    border: 1px solid #e4e7ee;
+    border-radius: 10px;
+    padding: 10px 14px;
+}
+div[data-testid="stMetric"] label { font-size: 0.78rem; color: #667; }
+button[data-baseweb="tab"] { font-size: 0.95rem; }
+div[data-testid="stDataFrame"] { font-size: 0.88rem; }
+section[data-testid="stSidebar"] h2 { font-size: 1.0rem; }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# GitHub Actions ワークフロー起動
+# ==========================================
+WORKFLOW_FILE = "daily_scan.yml"  # .github/workflows/ 内のファイル名
+
+def trigger_github_workflow() -> tuple[bool, str]:
+    """
+    GitHub Actionsのworkflow_dispatchを叩いてスキャンを起動する。
+    戻り値: (成功したか, メッセージ)
+    """
+    import requests
+    token = st.secrets.get("GITHUB_TOKEN")
+    repo  = st.secrets.get("GITHUB_REPO")
+    if not token or not repo:
+        return False, "GITHUB_TOKEN / GITHUB_REPO がSecretsに設定されていません。"
+
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{WORKFLOW_FILE}/dispatches"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    # main ブランチに対して実行（ブランチ名が違う場合はここを変更）
+    payload = {"ref": "main"}
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=20)
+        if r.status_code == 204:
+            return True, "スキャンを開始しました。"
+        elif r.status_code == 404:
+            return False, ("ワークフローまたはリポジトリが見つかりません。"
+                           "GITHUB_REPO名・ワークフローファイル名・トークン権限を確認してください。")
+        elif r.status_code in (401, 403):
+            return False, ("認証に失敗しました。トークンの権限（Actions: Read and write）"
+                           "や有効期限を確認してください。")
+        else:
+            return False, f"起動に失敗しました（HTTP {r.status_code}）: {r.text[:200]}"
+    except Exception as e:
+        return False, f"リクエスト中にエラーが発生しました: {e}"
+
+
+def get_latest_run_status() -> dict | None:
+    """直近のワークフロー実行の状態を取得する（表示用）"""
+    import requests
+    token = st.secrets.get("GITHUB_TOKEN")
+    repo  = st.secrets.get("GITHUB_REPO")
+    if not token or not repo:
+        return None
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{WORKFLOW_FILE}/runs?per_page=1"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code == 200:
+            runs = r.json().get("workflow_runs", [])
+            if runs:
+                run = runs[0]
+                return {
+                    "status": run.get("status"),          # queued/in_progress/completed
+                    "conclusion": run.get("conclusion"),  # success/failure/None
+                    "created_at": run.get("created_at"),
+                    "html_url": run.get("html_url"),
+                }
+    except Exception:
+        pass
+    return None
+
+
+# ==========================================
+# Googleスプレッドシート読み込み
+# ==========================================
+@st.cache_resource
+def get_gspread_client():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"], scopes=scopes
+    )
+    return gspread.authorize(creds)
+
+
+def _open_worksheet_with_retry(sheet_name: str, retries: int = 3):
+    """
+    ワークシートを開いて全値を取得する。
+    Googleの一時的な503エラー等に備えて数回リトライする。
+    戻り値: (values, found)  found=Falseはシート自体が存在しない
+    """
+    import time as _time
+    last_err = None
+    for attempt in range(retries):
+        try:
+            gc = get_gspread_client()
+            sh = gc.open_by_key(st.secrets["SPREADSHEET_ID"])
+            try:
+                ws = sh.worksheet(sheet_name)
+            except gspread.WorksheetNotFound:
+                return [], False
+            return ws.get_all_values(), True
+        except gspread.exceptions.APIError as e:
+            last_err = e
+            # 503(一時的な障害)やレート制限は待って再試行
+            _time.sleep(1.5 * (attempt + 1))
+        except Exception as e:
+            last_err = e
+            _time.sleep(1.0 * (attempt + 1))
+    # リトライしても失敗
+    raise last_err if last_err else RuntimeError("スプレッドシート取得に失敗しました")
+
+
+@st.cache_data(ttl=300)  # 5分キャッシュ
+def load_sheet(sheet_name: str) -> pd.DataFrame:
+    try:
+        values, found = _open_worksheet_with_retry(sheet_name)
+    except Exception:
+        # 数回リトライしても失敗したら空を返す（画面を落とさない）
+        st.warning(f"「{sheet_name}」の読み込みに失敗しました。"
+                   "Google側が一時的に混雑している可能性があります。"
+                   "少し待ってから『🔄 最新の結果を再取得』を押してください。")
+        return pd.DataFrame()
+
+    if not found or not values or len(values) < 2:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(values[1:], columns=values[0])
+    return df
+
+
+def to_tradingview_txt(df: pd.DataFrame) -> str:
+    """
+    TradingViewのウォッチリスト用テキストを作る。
+    形式: TSE:7203,TSE:9984,... （カンマ区切り、改行なしの1行）
+    """
+    if df.empty or "証券コード" not in df.columns:
+        return ""
+    codes = df["証券コード"].astype(str).str.strip()
+    codes = [c for c in codes if c and c != "-"]
+    return ",".join(f"TSE:{c}" for c in codes)
+
+
+WATCHLIST_SHEET_NAME = "ウォッチリスト"
+
+@st.cache_data(ttl=120)  # 2分キャッシュ
+def load_watchlist() -> pd.DataFrame:
+    """ウォッチリスト（証券コード, Ticker, 銘柄名, 登録日）を読み込む"""
+    empty = pd.DataFrame(columns=["証券コード", "Ticker", "銘柄名", "登録日"])
+    try:
+        values, found = _open_worksheet_with_retry(WATCHLIST_SHEET_NAME)
+    except Exception:
+        return empty
+    if not found or not values or len(values) < 2:
+        return empty
+    return pd.DataFrame(values[1:], columns=values[0])
+
+
+def save_watchlist(df: pd.DataFrame):
+    """ウォッチリスト全体を書き戻す"""
+    gc = get_gspread_client()
+    sh = gc.open_by_key(st.secrets["SPREADSHEET_ID"])
+    try:
+        ws = sh.worksheet(WATCHLIST_SHEET_NAME)
+        ws.clear()
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=WATCHLIST_SHEET_NAME, rows=500, cols=10)
+
+    if df.empty:
+        ws.update([["証券コード", "Ticker", "銘柄名", "登録日"]])
+    else:
+        values = [df.columns.tolist()] + df.astype(str).values.tolist()
+        ws.update(values)
+    load_watchlist.clear()
+
+
+def add_to_watchlist(code: str, ticker: str, name: str):
+    wl = load_watchlist()
+    if ticker in wl.get("Ticker", pd.Series(dtype=str)).values:
+        return  # 既に登録済み
+    import datetime
+    new_row = pd.DataFrame([{
+        "証券コード": code, "Ticker": ticker, "銘柄名": name,
+        "登録日": datetime.date.today().strftime("%Y-%m-%d"),
+    }])
+    wl = pd.concat([wl, new_row], ignore_index=True)
+    save_watchlist(wl)
+
+
+def remove_from_watchlist(ticker: str):
+    wl = load_watchlist()
+    wl = wl[wl["Ticker"] != ticker]
+    save_watchlist(wl)
+
+
+NUMERIC_HINTS = [
+    "終値", "始値", "高値", "安値", "MA", "BAND", "距離", "傾き", "RSI",
+    "売買代金", "時価総額", "出来高", "乖離", "σ", "騰落率", "日数",
+    "回数", "件数", "パターン数", "比",
+]
+
+def to_display_df(df: pd.DataFrame) -> pd.DataFrame:
+    """数値らしい列を数値化し、小数点の表示桁数も列の意味に応じて整える"""
+    out = df.copy()
+
+    # 判定は「率・比率っぽい列」を先にチェックしてから「価格・件数っぽい列」を見る。
+    # 例: "50BAND上限距離%" は "BAND" を含むが、実際は%表記の距離なので
+    #     先に "%" や "距離" にヒットさせて2桁小数にする必要がある。
+    TWO_DECIMAL_HINTS = ["%", "距離", "傾き", "乖離", "騰落率"]
+    ONE_DECIMAL_HINTS = ["RSI", "倍率", "比"]
+    INT_HINTS = [
+        "終値", "始値", "高値", "安値", "MA", "BAND", "σ",
+        "売買代金", "時価総額", "出来高", "日数", "件数",
+        "回数", "件", "パターン数",
+    ]
+
+    for col in out.columns:
+        if not any(h in col for h in NUMERIC_HINTS):
+            continue
+        converted = pd.to_numeric(out[col], errors="coerce")
+        # 半分以上が数値化できた列だけ置き換える（"-"混在の列を守る）
+        if converted.notna().sum() < len(out) * 0.5:
+            continue
+
+        if any(h in col for h in TWO_DECIMAL_HINTS):
+            out[col] = converted.round(2)
+        elif any(h in col for h in ONE_DECIMAL_HINTS):
+            out[col] = converted.round(1)
+        elif any(h in col for h in INT_HINTS):
+            out[col] = converted.round(0)
+        else:
+            out[col] = converted.round(2)
+
+    return out
+
+
+def get_format_map(df: pd.DataFrame) -> dict:
+    """列名の意味に応じて、Styler.format用のフォーマット辞書を作る（to_display_dfと同じ優先順位）"""
+    TWO_DECIMAL_HINTS = ["%", "距離", "傾き", "乖離", "騰落率"]
+    ONE_DECIMAL_HINTS = ["RSI", "倍率", "比"]
+    INT_HINTS = [
+        "終値", "始値", "高値", "安値", "MA", "BAND", "σ",
+        "売買代金", "時価総額", "出来高", "日数", "件数",
+        "回数", "件", "パターン数",
+    ]
+
+    fmt = {}
+    for col in df.columns:
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+        if any(h in col for h in TWO_DECIMAL_HINTS):
+            fmt[col] = "{:.2f}"
+        elif any(h in col for h in ONE_DECIMAL_HINTS):
+            fmt[col] = "{:.1f}"
+        elif any(h in col for h in INT_HINTS):
+            fmt[col] = "{:,.0f}"
+        else:
+            fmt[col] = "{:.2f}"
+    return fmt
+
+
+def style_table(df: pd.DataFrame, highlight_multi: bool = True):
+    """
+    表示用テーブル(Styler)を作る。
+    - 数値列の小数点表示を列の意味に応じて統一
+    - 「合致パターン数」が2以上の行を黄色くハイライト
+    """
+    fmt = get_format_map(df)
+    styler = df.style.format(fmt, na_rep="-")
+
+    if highlight_multi and "合致パターン数" in df.columns:
+        styler = styler.apply(
+            lambda x: ['background-color: #fff3c4'
+                       if float(x.get("合致パターン数", 0) or 0) >= 2 else ''
+                       for _ in x],
+            axis=1,
+        )
+    return styler
+
+
+def filter_df(df: pd.DataFrame, query: str, first_only: bool) -> pd.DataFrame:
+    """サイドバーの検索・絞り込みを適用する"""
+    out = df
+    if query:
+        q = query.strip()
+        mask = pd.Series(False, index=out.index)
+        for col in ("証券コード", "Ticker", "銘柄名"):
+            if col in out.columns:
+                mask |= out[col].astype(str).str.contains(q, case=False, na=False)
+        out = out[mask]
+    if first_only and "前回抽出日" in out.columns:
+        out = out[out["前回抽出日"].astype(str) == "初回"]
+    return out
+
+
+def render_sheet_tab(title: str, sheet_name: str, query: str, first_only: bool):
+    """1つのシートタブの中身を描画する（行クリックでチャート表示）"""
+    df = load_sheet(sheet_name)
+    if df.empty or "該当銘柄なし" in df.columns:
+        st.info("該当銘柄はありません。")
+        return
+
+    df = to_display_df(df)
+    df = filter_df(df, query, first_only)
+
+    # ── ウォッチリスト銘柄がヒットしているかチェック ──────
+    wl = load_watchlist()
+    wl_tickers = set(wl["Ticker"].astype(str)) if not wl.empty else set()
+
+    hit_note = f"該当 {len(df)} 銘柄"
+    if query or first_only:
+        hit_note += "（絞り込み適用中）"
+    st.caption(hit_note + "　💡 行をクリックするとチャートが表示されます")
+
+    if not df.empty and "Ticker" in df.columns and wl_tickers:
+        wl_hit = df[df["Ticker"].astype(str).isin(wl_tickers)]
+        if not wl_hit.empty:
+            names = ", ".join(
+                (wl_hit["銘柄名"] if "銘柄名" in wl_hit.columns
+                 else wl_hit["Ticker"]).astype(str).tolist()
+            )
+            st.success(f"⭐ ウォッチリスト銘柄がヒットしています: {names}")
+
+    if df.empty:
+        st.info("絞り込み条件に一致する銘柄はありません。")
+        return
+
+    df = df.reset_index(drop=True)
+
+    # ── ウォッチリスト銘柄には★マークを付ける ─────────────
+    if "Ticker" in df.columns and wl_tickers:
+        df.insert(0, "⭐", df["Ticker"].astype(str).apply(
+            lambda t: "⭐" if t in wl_tickers else ""))
+
+    # 複数パターン合致のハイライト＋数値表示フォーマットの統一
+    if "合致パターン数" in df.columns:
+        df["合致パターン数"] = pd.to_numeric(df["合致パターン数"], errors="coerce")
+    table_data = style_table(df)
+
+    # 行選択イベント付きのテーブル
+    event = st.dataframe(
+        table_data,
+        height=460,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=f"table_{sheet_name}",
+    )
+
+    dl_col1, dl_col2 = st.columns(2)
+    with dl_col1:
+        csv = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        st.download_button(
+            label="📥 CSVで保存",
+            data=csv,
+            file_name=f"{sheet_name}.csv",
+            mime="text/csv",
+            key=f"dl_{sheet_name}",
+        )
+    with dl_col2:
+        tv_txt = to_tradingview_txt(df)
+        st.download_button(
+            label="📈 TradingView用txt",
+            data=tv_txt.encode("utf-8"),
+            file_name=f"{sheet_name}_tradingview.txt",
+            mime="text/plain",
+            key=f"tv_{sheet_name}",
+            disabled=(tv_txt == ""),
+            help="TradingViewのウォッチリストにインポートできる形式（TSE:コード,...）で保存します",
+        )
+
+    # ── 行が選択されたらチャート＋お気に入り操作を表示 ──────
+    sel_rows = []
+    try:
+        sel_rows = event.selection.rows
+    except Exception:
+        sel_rows = []
+
+    if sel_rows:
+        row = df.iloc[sel_rows[0]]
+        ticker = str(row.get("Ticker", "")).strip()
+        name   = str(row.get("銘柄名", "")).strip()
+        code   = str(row.get("証券コード", "")).strip()
+
+        if ticker:
+            st.divider()
+            head_l, head_r, head_star = st.columns([3, 2, 1])
+            with head_l:
+                st.markdown(f"#### 📊 {code}　{name}")
+            with head_r:
+                period_label = st.radio(
+                    "表示期間",
+                    ["3ヶ月", "6ヶ月", "1年", "2年"],
+                    index=1,
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    key=f"period_{sheet_name}",
+                )
+            with head_star:
+                is_fav = ticker in wl_tickers
+                if is_fav:
+                    if st.button("⭐ 解除", key=f"unfav_{sheet_name}",
+                                use_container_width=True):
+                        remove_from_watchlist(ticker)
+                        st.rerun()
+                else:
+                    if st.button("☆ お気に入り登録", key=f"fav_{sheet_name}",
+                                use_container_width=True):
+                        add_to_watchlist(code, ticker, name)
+                        st.rerun()
+            period_map = {"3ヶ月": "3mo", "6ヶ月": "6mo", "1年": "1y", "2年": "2y"}
+
+            with st.spinner(f"{ticker} のチャートを取得中..."):
+                chart_df = fetch_chart_data(ticker, period=period_map[period_label])
+
+            if chart_df.empty:
+                st.error(f"{ticker} のデータを取得できませんでした。")
+            else:
+                fig = build_chart(chart_df, ticker, name)
+                st.plotly_chart(fig, use_container_width=True,
+                                key=f"plot_{sheet_name}")
+
+                latest = chart_df.iloc[-1]
+                prev   = chart_df.iloc[-2] if len(chart_df) >= 2 else latest
+                change     = float(latest["Close"]) - float(prev["Close"])
+                change_pct = change / float(prev["Close"]) * 100
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("終値",   f"¥{float(latest['Close']):,.0f}",
+                          f"{change:+,.0f} ({change_pct:+.2f}%)")
+                c2.metric("高値",   f"¥{float(latest['High']):,.0f}")
+                c3.metric("安値",   f"¥{float(latest['Low']):,.0f}")
+                c4.metric("出来高", f"{int(float(latest['Volume'])):,}")
+
+
+# ==========================================
+# チャート関連
+# ==========================================
+@st.cache_data(ttl=3600)
+def fetch_chart_data(ticker: str, period: str = "1y") -> pd.DataFrame:
+    try:
+        df = yf.download(ticker, period=period, interval="1d",
+                         auto_adjust=True, progress=False)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def build_chart(df: pd.DataFrame, ticker: str, name: str) -> go.Figure:
+    c = df["Close"]
+    df["MA21"]  = c.rolling(21).mean()
+    df["MA50"]  = c.rolling(50).mean()
+    df["MA200"] = c.rolling(200).mean()
+    df["BB_MID"] = c.rolling(20).mean()
+    df["BB_STD"] = c.rolling(20).std()
+    df["BB_U2"]  = df["BB_MID"] + df["BB_STD"] * 2
+    df["BB_L2"]  = df["BB_MID"] - df["BB_STD"] * 2
+    df["BB_U1"]  = df["BB_MID"] + df["BB_STD"] * 1
+    df["BB_L1"]  = df["BB_MID"] - df["BB_STD"] * 1
+
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        vertical_spacing=0.04, row_heights=[0.78, 0.22],
+    )
+
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"], name="ローソク足",
+        increasing_line_color="#1B75BB", decreasing_line_color="#E94747",
+        increasing_fillcolor="#1B75BB", decreasing_fillcolor="#E94747",
+    ), row=1, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["BB_U2"],
+        line=dict(color="rgba(180,130,255,0.4)", width=1),
+        name="+2σ",
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["BB_L2"],
+        line=dict(color="rgba(180,130,255,0.4)", width=1),
+        fill="tonexty", fillcolor="rgba(180,130,255,0.07)",
+        name="-2σ",
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["BB_U1"],
+        line=dict(color="rgba(180,130,255,0.25)", width=0.8, dash="dot"),
+        name="+1σ", showlegend=False,
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["BB_L1"],
+        line=dict(color="rgba(180,130,255,0.25)", width=0.8, dash="dot"),
+        name="-1σ", showlegend=False,
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["BB_MID"],
+        line=dict(color="rgba(180,130,255,0.7)", width=1.2, dash="dash"),
+        name="BB中心(20MA)",
+    ), row=1, col=1)
+
+    for col_name, color, width in [
+        ("MA21", "#F4A460", 1.5),
+        ("MA50", "#3CB371", 1.5),
+        ("MA200", "#FF6347", 2.0),
+    ]:
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df[col_name],
+            line=dict(color=color, width=width), name=col_name,
+        ), row=1, col=1)
+
+    colors = ["#1B75BB" if r["Close"] >= r["Open"] else "#E94747"
+              for _, r in df.iterrows()]
+    fig.add_trace(go.Bar(
+        x=df.index, y=df["Volume"], name="出来高",
+        marker_color=colors, opacity=0.7, showlegend=False,
+    ), row=2, col=1)
+
+    name_label = f"　{name}" if name and name != "-" else ""
+    fig.update_layout(
+        title=dict(text=f"{ticker}{name_label}　日足チャート", font=dict(size=16)),
+        height=640,
+        margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01,
+                    xanchor="left", x=0, font=dict(size=11)),
+        xaxis_rangeslider_visible=False,
+        xaxis2=dict(rangeslider=dict(visible=True, thickness=0.04)),
+        plot_bgcolor="white", paper_bgcolor="white",
+        hovermode="x unified",
+    )
+    fig.update_yaxes(gridcolor="rgba(200,200,200,0.3)")
+    fig.update_xaxes(gridcolor="rgba(200,200,200,0.3)")
+    return fig
+
+
+# ==========================================
+# サイドバー（共通操作を集約）
+# ==========================================
+with st.sidebar:
+    st.header("🔍 検索・絞り込み")
+    query = st.text_input(
+        "銘柄コード・銘柄名で検索",
+        placeholder="例: 7203 / トヨタ",
+        key="sb_query",
+    )
+    first_only = st.toggle("🆕 初回抽出のみ表示", key="sb_first_only",
+                           help="「前回抽出日」が初回の銘柄だけに絞り込みます")
+
+    st.divider()
+    if st.button("🔄 最新の結果を再取得", key="btn_refresh", use_container_width=True):
+        load_sheet.clear()
+        st.rerun()
+    st.caption("結果は5分間キャッシュされます。スキャン直後はこのボタンで更新してください。")
+
+    st.divider()
+    st.header("▶️ 手動スキャン")
+    st.caption("GitHub Actionsのスキャンを今すぐ起動します。全銘柄スキャンは完了まで10分前後かかります。")
+
+    if st.button("🚀 スキャンを今すぐ実行", key="btn_run_scan", use_container_width=True,
+                 type="primary"):
+        ok, msg = trigger_github_workflow()
+        if ok:
+            st.success(f"✅ {msg}")
+            st.info("完了まで10分ほどかかります。しばらく待ってから"
+                    "「🔄 最新の結果を再取得」を押してください。")
+        else:
+            st.error(f"⚠️ {msg}")
+
+    # 直近の実行状態を表示
+    run_info = get_latest_run_status()
+    if run_info:
+        status     = run_info.get("status")
+        conclusion = run_info.get("conclusion")
+        if status == "completed":
+            if conclusion == "success":
+                badge = "✅ 前回のスキャン: 成功"
+            elif conclusion == "failure":
+                badge = "❌ 前回のスキャン: 失敗"
+            else:
+                badge = f"前回のスキャン: {conclusion}"
+        elif status in ("queued", "in_progress"):
+            badge = "⏳ スキャン実行中…（完了まで少々お待ちください）"
+        else:
+            badge = f"状態: {status}"
+        st.caption(badge)
+        if run_info.get("html_url"):
+            st.caption(f"[GitHub Actionsで詳細を見る]({run_info['html_url']})")
+
+    st.divider()
+    st.caption(
+        "データ更新: GitHub Actionsが毎営業日 夕方〜夜に自動スキャンし、"
+        "Googleスプレッドシートへ保存しています。"
+        "自動実行が遅い場合は上の「スキャンを今すぐ実行」で手動起動できます。"
+    )
+
+# ==========================================
+# 決算モメンタムタブ
+# ==========================================
+def render_momentum_tab():
+    st.subheader("🔥 決算モメンタムランキング")
+    st.caption(
+        "決算内容 × 決算後の株価反応 × 出来高 × SMA25 × 高値更新 × RS風指標を "
+        "100点満点で評価します。現在は追加課金なしのyfinance版です。"
+    )
+
+    df = load_sheet("決算モメンタム")
+    if df.empty or "該当銘柄なし" in df.columns:
+        st.info("決算モメンタムの該当銘柄はありません。まずGitHub Actionsのスキャンを実行してください。")
+        return
+
+    # 数値化
+    for col in [
+        "スコア", "決算後騰落率%", "売上成長%", "営業利益成長%",
+        "EPS/純利益成長%", "営業利益率%", "EPSサプライズ%",
+        "決算反応出来高倍率", "現在出来高倍率", "20日騰落率%", "RS風",
+        "業績点", "決算イベント点", "現在テクニカル点", "データ充足率%"
+    ]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # フィルター
+    max_score_available = df["スコア"].max() if "スコア" in df.columns else 0
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        min_score = st.slider("最低スコア", 0, 100, 30, 5, key="mom_min_score")
+    with f2:
+        signal = st.selectbox(
+            "シグナル",
+            ["すべて", "🔥 BUY", "🟢 BUY", "🟡 WATCH", "🔴 AVOID"],
+            key="mom_signal"
+        )
+    with f3:
+        rank = st.selectbox(
+            "ランク",
+            ["すべて", "S+", "S", "A", "B", "C"],
+            key="mom_rank"
+        )
+    with f4:
+        recent_only = st.checkbox(
+            "決算後+3%以上のみ",
+            value=False,
+            key="mom_recent_only"
+        )
+
+    if pd.notna(max_score_available):
+        st.caption(f"💡 今回のスキャンでの最高スコアは {max_score_available:.0f} 点です。"
+                   "該当が少ない場合はスライダーを下げてみてください。")
+
+    out = df[df["スコア"].fillna(0) >= min_score].copy()
+    if signal != "すべて" and "シグナル" in out.columns:
+        out = out[out["シグナル"] == signal]
+    if rank != "すべて" and "ランク" in out.columns:
+        out = out[out["ランク"] == rank]
+    if recent_only and "決算後騰落率%" in out.columns:
+        out = out[out["決算後騰落率%"].fillna(-999) >= 3]
+
+    st.caption(f"該当 {len(out)} 銘柄　｜　S+ / S / Aを優先して表示")
+
+    cols = [
+        "順位", "証券コード", "銘柄名", "決算日", "スコア", "データ充足率%", "ランク", "シグナル",
+        "決算後騰落率%", "決算反応日", "決算後経過営業日", "売上成長%", "営業利益成長%", "EPS/純利益成長%",
+        "成長加速", "EPSサプライズ%", "決算反応出来高倍率", "現在出来高倍率", "SMA25上",
+        "20日高値更新", "52週高値接近", "RS風"
+    ]
+    cols = [c for c in cols if c in out.columns]
+    st.dataframe(
+        out[cols].reset_index(drop=True),
+        height=520,
+        hide_index=True,
+    )
+
+    csv = out.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+    st.download_button(
+        "📥 決算モメンタムCSV",
+        data=csv,
+        file_name="決算モメンタム.csv",
+        mime="text/csv",
+        key="dl_momentum",
+    )
+
+    if out.empty:
+        return
+
+    st.divider()
+    st.subheader("🎯 選択銘柄の売買ルール目安")
+
+    labels = []
+    for _, r in out.head(100).iterrows():
+        code = str(r.get("証券コード", ""))
+        name = str(r.get("銘柄名", ""))
+        labels.append(f"{code}　{name}".strip())
+
+    selected = st.selectbox("銘柄を選択", labels, key="momentum_selected")
+    selected_code = selected.split("　")[0].strip()
+    row = out[out["証券コード"].astype(str) == selected_code].iloc[0]
+
+    # 現在値はチャートから取得
+    ticker = str(row.get("Ticker", "")).strip()
+    chart_df = fetch_chart_data(ticker, period="6mo") if ticker else pd.DataFrame()
+
+    current_price = np.nan
+    if not chart_df.empty:
+        current_price = float(chart_df["Close"].iloc[-1])
+
+    entry = current_price
+    stop = entry * 0.93 if not pd.isna(entry) else np.nan
+    tp1 = entry * 1.15 if not pd.isna(entry) else np.nan
+    tp2 = entry * 1.25 if not pd.isna(entry) else np.nan
+
+    m = st.columns(7)
+    m[0].metric("スコア", f"{float(row['スコア']):.0f}")
+    m[1].metric("データ充足率", f"{float(row['データ充足率%']):.0f}%" if not pd.isna(row.get("データ充足率%")) else "-",
+                help="決算・株価データのうち、実際に採点できた割合。低いほどスコアの信頼度は低めに見てください。")
+    m[2].metric("ランク", str(row.get("ランク", "-")))
+    m[3].metric("シグナル", str(row.get("シグナル", "-")))
+    m[4].metric("決算後", f"{float(row['決算後騰落率%']):+.1f}%" if not pd.isna(row.get("決算後騰落率%")) else "-")
+    m[5].metric("出来高", f"{float(row['決算反応出来高倍率']):.2f}倍" if not pd.isna(row.get("決算反応出来高倍率")) else "-")
+    m[6].metric("RS風", f"{float(row['RS風']):.1f}" if not pd.isna(row.get("RS風")) else "-")
+
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("現在値", f"¥{entry:,.0f}" if not pd.isna(entry) else "-")
+    p2.metric("損切り目安 -7%", f"¥{stop:,.0f}" if not pd.isna(stop) else "-")
+    p3.metric("利確① +15%", f"¥{tp1:,.0f}" if not pd.isna(tp1) else "-")
+    p4.metric("利確② +25%", f"¥{tp2:,.0f}" if not pd.isna(tp2) else "-")
+
+    st.markdown(
+        "**v3基本ルール:** 決算後5営業日以内をBUY判定の対象とし、"
+        "通常BUYは決算後+3%以上・決算反応出来高1.5倍以上・SMA25上、"
+        "強力BUYは決算後+7%以上・決算反応出来高2倍以上・20日高値更新を条件にします。"
+        "決算反応時の出来高と現在の出来高を分離し、寄り付きへの飛びつきではなく押し目を待つ前提です。"
+    )
+
+    if not chart_df.empty:
+        name = str(row.get("銘柄名", ""))
+        fig = build_chart(chart_df, ticker, name)
+        st.plotly_chart(fig, use_container_width=True, key="momentum_chart")
+
+
+# ==========================================
+# ヘッダー & サマリーカード
+# ==========================================
+st.title("📈 日本株スクリーナー")
+
+log_df = load_sheet("実行ログ")
+if not log_df.empty:
+    last = log_df.iloc[-1]
+    st.caption(f"最終スキャン: {last.get('最終実行日時', '不明')}　|　"
+               f"対象 {last.get('対象銘柄数', '-')} 銘柄　|　"
+               f"トリガー: {last.get('トリガー種別', '-')}")
+
+    m = st.columns(10)
+    m[0].metric("⭐ 複数合致",  last.get("複数合致件数", "-"))
+    m[1].metric("週足A",        last.get("週足A件数", "-"))
+    m[2].metric("日足B1 押し目", last.get("日足B1件数", "-"))
+    m[3].metric("日足B2 反発",   last.get("日足B2件数", "-"))
+    m[4].metric("ボリバンC",     last.get("ボリバンC件数", "-"))
+    m[5].metric("初押しD",       last.get("初押しD件数", "-"))
+    m[6].metric("出来高E",       last.get("出来高E件数", "-"))
+    m[7].metric("GC底打ちF",     last.get("GC底打ちF件数", "-"))
+    m[8].metric("ポケピG",       last.get("ポケピG件数", "-"))
+    m[9].metric("決算モメンタム", last.get("決算モメンタム件数", "-"))
+else:
+    st.warning("実行ログが見つかりません。GitHub Actionsがまだ一度も実行されていない可能性があります。")
+
+st.divider()
+
+# ==========================================
+# タブ
+# ==========================================
+tabs = st.tabs([
+    "⭐ 複数合致",
+    "🔥 決算モメンタム",
+    "週足A",
+    "B1 押し目🟡",
+    "B2 反発🚀",
+    "ボリバンC💥",
+    "初押しD🎯",
+    "出来高E📢",
+    "GC底打ちF🔄",
+    "ポケピG🎪",
+    "🌟 ウォッチリスト",
+    "📊 チャート",
+])
+
+sheet_map = [
+    (tabs[0], "複数パターン合致",             "複数パターン合致"),
+    (tabs[2], "週足パターンA（長期）",         "週足パターンA"),
+    (tabs[3], "日足B1 押し目待ち",             "日足B1押し目待ち"),
+    (tabs[4], "日足B2 反発エントリー",         "日足B2反発エントリー"),
+    (tabs[5], "ボリンジャーバンド +2σ ブレイク", "ボリバンCブレイク"),
+    (tabs[6], "初押し・SMA25タッチ 下ひげ陽線", "初押しD下ひげ陽線"),
+    (tabs[7], "揉み合い後の出来高急増ブレイク",   "出来高E急増ブレイク"),
+    (tabs[8], "21MA×200MA ゴールデンクロス（底打ち）", "GC底打ちF21x200"),
+    (tabs[9], "ポケットピボット（オニール系）", "ポケットピボットG"),
+]
+
+for tab, title, sheet_name in sheet_map:
+    with tab:
+        render_sheet_tab(title, sheet_name, query, first_only)
+
+# ==========================================
+# 決算モメンタム
+# ==========================================
+with tabs[1]:
+    render_momentum_tab()
+
+# ==========================================
+# ウォッチリストタブ
+# ==========================================
+with tabs[10]:
+    st.subheader("🌟 ウォッチリスト（お気に入り銘柄）")
+    st.caption(
+        "各タブの銘柄をクリック→「☆ お気に入り登録」で追加できます。"
+        "登録した銘柄が他のスクリーニング結果にヒットすると、該当タブの上部に通知が表示されます。"
+    )
+
+    wl = load_watchlist()
+    if wl.empty:
+        st.info("まだお気に入り登録された銘柄がありません。")
+    else:
+        # 表示用に整形
+        wl_disp = wl.reset_index(drop=True)
+        event_wl = st.dataframe(
+            wl_disp,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="table_watchlist",
+        )
+
+        del_col1, del_col2 = st.columns([1, 4])
+        sel_rows_wl = []
+        try:
+            sel_rows_wl = event_wl.selection.rows
+        except Exception:
+            sel_rows_wl = []
+
+        if sel_rows_wl:
+            sel_row = wl_disp.iloc[sel_rows_wl[0]]
+            sel_ticker = str(sel_row.get("Ticker", ""))
+            sel_name   = str(sel_row.get("銘柄名", ""))
+            with del_col1:
+                if st.button(f"🗑️ 削除", key="btn_remove_watchlist",
+                            use_container_width=True):
+                    remove_from_watchlist(sel_ticker)
+                    st.rerun()
+            with del_col2:
+                st.caption(f"選択中: {sel_name}（{sel_ticker}）")
+
+            # ウォッチリスト内の銘柄もチャート表示できるように
+            st.divider()
+            period_label_wl = st.radio(
+                "表示期間", ["3ヶ月", "6ヶ月", "1年", "2年"],
+                index=1, horizontal=True, key="period_watchlist",
+            )
+            period_map = {"3ヶ月": "3mo", "6ヶ月": "6mo", "1年": "1y", "2年": "2y"}
+            with st.spinner(f"{sel_ticker} のチャートを取得中..."):
+                chart_df_wl = fetch_chart_data(sel_ticker, period=period_map[period_label_wl])
+            if not chart_df_wl.empty:
+                fig_wl = build_chart(chart_df_wl, sel_ticker, sel_name)
+                st.plotly_chart(fig_wl, use_container_width=True, key="plot_watchlist")
+
+        # TradingView用の一括エクスポートもここで
+        tv_txt_wl = to_tradingview_txt(wl)
+        st.download_button(
+            label="📈 ウォッチリストをTradingView用txtで保存",
+            data=tv_txt_wl.encode("utf-8"),
+            file_name="watchlist_tradingview.txt",
+            mime="text/plain",
+            key="tv_watchlist",
+            disabled=(tv_txt_wl == ""),
+        )
+
+# ==========================================
+# チャートタブ
+# ==========================================
+with tabs[11]:
+    left_col, right_col = st.columns([1, 3])
+
+    with left_col:
+        st.markdown("##### 銘柄を選択")
+
+        source_options = {
+            "⭐ 複数パターン合致": "複数パターン合致",
+            "🔥 決算モメンタム": "決算モメンタム",
+            "週足パターンA":       "週足パターンA",
+            "日足B1 押し目待ち":   "日足B1押し目待ち",
+            "日足B2 反発エントリー": "日足B2反発エントリー",
+            "ボリバンC ブレイク":  "ボリバンCブレイク",
+            "初押しD 下ひげ陽線":  "初押しD下ひげ陽線",
+            "出来高E 急増ブレイク": "出来高E急増ブレイク",
+            "GC底打ちF 21×200":   "GC底打ちF21x200",
+            "ポケットピボットG":   "ポケットピボットG",
+            "🌟 ウォッチリスト":   "__watchlist__",
+        }
+        selected_source = st.selectbox(
+            "表示するリスト",
+            list(source_options.keys()),
+            key="chart_source",
+        )
+        source_key = source_options[selected_source]
+        if source_key == "__watchlist__":
+            df_source = load_watchlist()
+        else:
+            df_source = load_sheet(source_key)
+
+        ticker_options = []
+        if not df_source.empty and "Ticker" in df_source.columns:
+            if "銘柄名" in df_source.columns:
+                labels = (df_source["証券コード"].astype(str)
+                          + "　" + df_source["銘柄名"].astype(str))
+            else:
+                labels = df_source["Ticker"].astype(str)
+            ticker_options = list(zip(labels, df_source["Ticker"].astype(str)))
+
+        selected_ticker = None
+        if ticker_options:
+            labels_list = [lbl for lbl, _ in ticker_options]
+            n_opts = len(labels_list)
+
+            # ── 現在の選択位置をsession_stateで管理 ──
+            # リスト(source)が変わったら位置を0にリセット
+            if st.session_state.get("chart_source_prev") != selected_source:
+                st.session_state["chart_idx"] = 0
+                st.session_state["chart_source_prev"] = selected_source
+            # 範囲外にならないよう補正
+            idx = st.session_state.get("chart_idx", 0)
+            idx = max(0, min(idx, n_opts - 1))
+            st.session_state["chart_idx"] = idx
+
+            # ── 前へ / 次へ ボタン ──
+            nav_prev, nav_pos, nav_next = st.columns([1, 1, 1])
+            with nav_prev:
+                if st.button("◀ 前へ", key="chart_prev", use_container_width=True,
+                             disabled=(idx <= 0)):
+                    st.session_state["chart_idx"] = idx - 1
+                    st.rerun()
+            with nav_pos:
+                st.markdown(
+                    f"<div style='text-align:center;padding-top:6px;'>"
+                    f"{idx + 1} / {n_opts}</div>",
+                    unsafe_allow_html=True,
+                )
+            with nav_next:
+                if st.button("次へ ▶", key="chart_next", use_container_width=True,
+                             disabled=(idx >= n_opts - 1)):
+                    st.session_state["chart_idx"] = idx + 1
+                    st.rerun()
+
+            # ── selectbox（直接選択も可能。位置と同期）──
+            # keyは付けずindexで制御（keyとindex併用はsession_stateと競合するため）
+            selected_label = st.selectbox(
+                "銘柄",
+                labels_list,
+                index=idx,
+            )
+            # selectboxで直接選ばれたら、その位置にst.session_stateを合わせる
+            picked_idx = labels_list.index(selected_label)
+            if picked_idx != idx:
+                st.session_state["chart_idx"] = picked_idx
+                idx = picked_idx
+
+            selected_ticker = ticker_options[idx][1]
+
+            selected_period_label = st.radio(
+                "表示期間",
+                ["3ヶ月", "6ヶ月", "1年", "2年"],
+                index=2,
+                horizontal=True,
+                key="chart_period",
+            )
+            period_map = {"3ヶ月": "3mo", "6ヶ月": "6mo", "1年": "1y", "2年": "2y"}
+            selected_period = period_map[selected_period_label]
+        else:
+            st.info("このリストに銘柄がありません。")
+
+    with right_col:
+        if ticker_options and selected_ticker:
+            if "銘柄名" in df_source.columns:
+                nr = df_source[df_source["Ticker"] == selected_ticker]
+                company_name = nr["銘柄名"].iloc[0] if not nr.empty else ""
+            else:
+                company_name = ""
+
+            with st.spinner(f"{selected_ticker} のチャートを取得中..."):
+                chart_df = fetch_chart_data(selected_ticker, period=selected_period)
+
+            if chart_df.empty:
+                st.error(f"{selected_ticker} のデータを取得できませんでした。")
+            else:
+                fig = build_chart(chart_df, selected_ticker, company_name)
+                st.plotly_chart(fig, use_container_width=True)
+
+                latest = chart_df.iloc[-1]
+                prev   = chart_df.iloc[-2] if len(chart_df) >= 2 else latest
+                change     = float(latest["Close"]) - float(prev["Close"])
+                change_pct = change / float(prev["Close"]) * 100
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("終値",   f"¥{float(latest['Close']):,.0f}",
+                          f"{change:+,.0f} ({change_pct:+.2f}%)")
+                c2.metric("高値",   f"¥{float(latest['High']):,.0f}")
+                c3.metric("安値",   f"¥{float(latest['Low']):,.0f}")
+                c4.metric("出来高", f"{int(float(latest['Volume'])):,}")
+        else:
+            st.info("左のリストから銘柄を選ぶとチャートが表示されます。")
