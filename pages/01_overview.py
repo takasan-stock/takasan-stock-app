@@ -6,7 +6,7 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="4系統サマリー", page_icon="🧭", layout="wide")
 
 st.title("🧭 4系統サマリー")
-st.caption("A〜Gの個別パターンを、底打ち転換・押し目・ブレイク・決算モメンタムの4系統で見やすく整理します。")
+st.caption("底打ち転換・押し目・ブレイク・決算モメンタムを4系統で整理し、総合スコアで優先順位を確認できます。")
 
 
 @st.cache_resource
@@ -48,42 +48,69 @@ overlap = load_sheet("重複分析")
 if summary.empty:
     st.warning("4系統サマリーがまだありません。GitHub Actionsのスキャン完了後に表示されます。")
 else:
-    for col in ["該当系統数", "元パターン合計", "終値"]:
+    numeric_cols = [
+        "該当系統数", "元パターン合計", "終値", "総合スコア", "テクニカル総合",
+        "TURNAROUNDスコア", "PULLBACKスコア", "BREAKOUTスコア", "EARNINGSスコア",
+    ]
+    for col in numeric_cols:
         if col in summary.columns:
             summary[col] = pd.to_numeric(summary[col], errors="coerce")
 
-    turn_count = int(summary["TURNAROUND"].astype(str).str.strip().ne("").sum()) if "TURNAROUND" in summary.columns else 0
-    pull_count = int(summary["PULLBACK"].astype(str).str.strip().ne("").sum()) if "PULLBACK" in summary.columns else 0
-    break_count = int(summary["BREAKOUT"].astype(str).str.strip().ne("").sum()) if "BREAKOUT" in summary.columns else 0
-    earn_count = len(earnings) if not earnings.empty else 0
+    turn_count = int((summary.get("TURNAROUNDスコア", pd.Series(dtype=float)).fillna(0) > 0).sum())
+    pull_count = int((summary.get("PULLBACKスコア", pd.Series(dtype=float)).fillna(0) > 0).sum())
+    break_count = int((summary.get("BREAKOUTスコア", pd.Series(dtype=float)).fillna(0) > 0).sum())
+    earn_count = int((summary.get("EARNINGSスコア", pd.Series(dtype=float)).fillna(0) > 0).sum())
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("🔄 TURNAROUND", turn_count, help="週足A + GC底打ちF")
-    m2.metric("🎯 PULLBACK", pull_count, help="日足B1 + 日足B2 + 初押しD")
-    m3.metric("🚀 BREAKOUT", break_count, help="ボリバンC + 出来高E + ポケットピボットG")
-    m4.metric("🔥 EARNINGS", earn_count, help="決算モメンタム")
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("🏆 総合80点以上", int((summary.get("総合スコア", pd.Series(dtype=float)).fillna(0) >= 80).sum()))
+    m2.metric("🔄 TURNAROUND", turn_count, help="週足A + GC底打ちF")
+    m3.metric("🎯 PULLBACK", pull_count, help="日足B1 + 日足B2 + 初押しD")
+    m4.metric("🚀 BREAKOUT", break_count, help="ボリバンC + 出来高E + ポケットピボットG")
+    m5.metric("🔥 EARNINGS", earn_count, help="決算モメンタム")
+
+    with st.expander("📐 総合スコアの計算方法"):
+        st.markdown(
+            "- テクニカル3系統は、1条件ヒットを60点の起点にし、同系統で確認材料が増えるほど80〜100点へ上げます。\n"
+            "- 最も強いテクニカル系統を主軸に、別系統にも同時ヒットしていれば1系統につき+5点します（上限100）。\n"
+            "- 決算モメンタムがある銘柄は、**テクニカル80% + EARNINGS20%** で総合化します。\n"
+            "- 決算モメンタムが無い銘柄は、決算データ不足を理由に減点せずテクニカル総合をそのまま使います。\n"
+            "- テクニカル該当が無く決算モメンタムだけある銘柄は、EARNINGSスコアを総合スコアとして使います。"
+        )
 
     st.divider()
 
-    c1, c2, c3 = st.columns([1.2, 1.2, 1.8])
+    c1, c2, c3, c4 = st.columns([1.2, 1.1, 1.1, 1.8])
     with c1:
         category = st.selectbox(
             "表示系統",
-            ["すべて", "TURNAROUND", "PULLBACK", "BREAKOUT", "複数系統のみ"],
+            ["すべて", "TURNAROUND", "PULLBACK", "BREAKOUT", "EARNINGS", "複数系統のみ"],
         )
     with c2:
-        min_sources = st.selectbox("元パターン合計", [1, 2, 3, 4], index=0)
+        min_score = st.slider("最低総合スコア", 0, 100, 0, 5)
     with c3:
+        rank_filter = st.selectbox("総合ランク", ["すべて", "S", "A", "B", "C", "D", "E"])
+    with c4:
         query = st.text_input("銘柄コード・銘柄名検索", placeholder="例: 4063 / 信越")
 
     out = summary.copy()
-    if category in ("TURNAROUND", "PULLBACK", "BREAKOUT") and category in out.columns:
-        out = out[out[category].astype(str).str.strip().ne("")]
-    elif category == "複数系統のみ" and "該当系統数" in out.columns:
-        out = out[out["該当系統数"].fillna(0) >= 2]
+    score_col_map = {
+        "TURNAROUND": "TURNAROUNDスコア",
+        "PULLBACK": "PULLBACKスコア",
+        "BREAKOUT": "BREAKOUTスコア",
+        "EARNINGS": "EARNINGSスコア",
+    }
+    if category in score_col_map and score_col_map[category] in out.columns:
+        out = out[out[score_col_map[category]].fillna(0) > 0]
+    elif category == "複数系統のみ":
+        active_cols = [c for c in score_col_map.values() if c in out.columns]
+        if active_cols:
+            active_count = sum((out[c].fillna(0) > 0).astype(int) for c in active_cols)
+            out = out[active_count >= 2]
 
-    if "元パターン合計" in out.columns:
-        out = out[out["元パターン合計"].fillna(0) >= min_sources]
+    if "総合スコア" in out.columns:
+        out = out[out["総合スコア"].fillna(0) >= min_score]
+    if rank_filter != "すべて" and "総合ランク" in out.columns:
+        out = out[out["総合ランク"].astype(str) == rank_filter]
 
     if query:
         q = query.strip()
@@ -93,21 +120,22 @@ else:
                 mask |= out[col].astype(str).str.contains(q, case=False, na=False)
         out = out[mask]
 
-    sort_cols = [c for c in ["該当系統数", "元パターン合計"] if c in out.columns]
+    sort_cols = [c for c in ["総合スコア", "テクニカル総合", "元パターン合計"] if c in out.columns]
     if sort_cols:
         out = out.sort_values(sort_cols, ascending=[False] * len(sort_cols))
 
-    st.subheader("📋 4系統一覧")
-    st.caption(f"該当 {len(out)} 銘柄。複数系統・複数元パターンに重なる銘柄を上位に表示します。")
+    st.subheader("🏆 総合ランキング")
+    st.caption(f"該当 {len(out)} 銘柄。総合スコアの高い順に表示します。")
     show_cols = [
-        "証券コード", "Ticker", "銘柄名", "終値", "該当系統数", "該当系統",
-        "TURNAROUND", "PULLBACK", "BREAKOUT", "元パターン合計",
+        "証券コード", "Ticker", "銘柄名", "終値", "総合スコア", "総合ランク",
+        "TURNAROUNDスコア", "PULLBACKスコア", "BREAKOUTスコア", "EARNINGSスコア",
+        "テクニカル総合", "4系統該当", "元パターン合計",
     ]
     show_cols = [c for c in show_cols if c in out.columns]
-    st.dataframe(out[show_cols].reset_index(drop=True), use_container_width=True, height=520, hide_index=True)
+    st.dataframe(out[show_cols].reset_index(drop=True), use_container_width=True, height=560, hide_index=True)
 
     csv = out.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button("📥 4系統サマリーCSV", csv, "4系統サマリー.csv", "text/csv")
+    st.download_button("📥 総合ランキングCSV", csv, "4系統_総合ランキング.csv", "text/csv")
 
 st.divider()
 
@@ -137,4 +165,4 @@ with right:
         st.dataframe(overlap[cols].head(15), use_container_width=True, hide_index=True, height=420)
         st.caption("重複率が高い組み合わせは、今後の整理・統合候補です。すぐ削除せず数週間の実データで判断します。")
 
-st.info("既存A〜Gの個別スクリーナーは元画面に残しています。このページを普段使いの入口にし、個別条件は必要な時だけ確認する運用を想定しています。")
+st.info("既存A〜Gの個別スクリーナーは元画面に残しています。Overviewでは総合スコアで候補を絞り、詳細確認は個別画面で行えます。")
