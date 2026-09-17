@@ -41,9 +41,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-scan.txt
 
-      - name: 全銘柄スキャン実行
+      - name: JPX取得ガード付き全銘柄スキャン実行
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-        run: python scan.py
+        run: python safe_scan.py
