@@ -6,21 +6,19 @@ on:
     # 「その日の夜のうちに確実に1回終わらせる」狙いで、市場終了後〜夜22時台まで
     # 複数の時刻を予約する。scan.py側で「当日すでにスキャン済みならスキップ」するため、
     # 実際にスキャンが走るのは1日1回だけ（最初に時間内に起動できたもの）。
-    # ・混雑ピークを避けるため、あえて半端な分(:07,:23等)を指定している。
-    # ・遅延しても夜のうちに拾えるよう、夜遅めの時刻にも予約を残している。
-    - cron: "7 6 * * 1-5"     # UTC  6:07 = JST 15:07（市場終了直後）
-    - cron: "23 7 * * 1-5"    # UTC  7:23 = JST 16:23
-    - cron: "37 8 * * 1-5"    # UTC  8:37 = JST 17:37
-    - cron: "53 9 * * 1-5"    # UTC  9:53 = JST 18:53
-    - cron: "11 11 * * 1-5"   # UTC 11:11 = JST 20:11
-    - cron: "29 12 * * 1-5"   # UTC 12:29 = JST 21:29
-    - cron: "43 13 * * 1-5"   # UTC 13:43 = JST 22:43
-  workflow_dispatch:        # 手動実行ボタンも使えるようにする
+    - cron: "7 6 * * 1-5"
+    - cron: "23 7 * * 1-5"
+    - cron: "37 8 * * 1-5"
+    - cron: "53 9 * * 1-5"
+    - cron: "11 11 * * 1-5"
+    - cron: "29 12 * * 1-5"
+    - cron: "43 13 * * 1-5"
+  workflow_dispatch:
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 90      # GitHub Actionsの上限（無料枠でも十分な余裕）
+    timeout-minutes: 90
 
     steps:
       - name: トリガー種別を表示（定期実行か手動実行かを記録）
@@ -53,3 +51,9 @@ jobs:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: python category_review.py
+
+      - name: 4系統サマリーへ総合スコアを付与
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: python overall_score.py
