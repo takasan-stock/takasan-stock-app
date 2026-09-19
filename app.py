@@ -133,16 +133,19 @@ def render_rank_table(df,category=None,key="rank"):
         "証券コード","Ticker","銘柄名","終値","実戦スコア","実戦ステータス","主力シグナル","主力品質",
         "過熱判定","過熱ペナルティ","総合スコア","総合ランク",
         "RS Rating","出来高モメンタム","テクニカル総合","価格品質","パターン構造",
-        "TURNAROUND品質","PULLBACK品質","BREAKOUT品質","過熱ペナルティ",
+        "TURNAROUND品質","PULLBACK品質","BREAKOUT品質",
         "20MA乖離%","50MA乖離%","MA傾き","52週高値距離%","20日レンジ位置","20日ブレイク距離%",
         "EARNINGSスコア",
         "TURNAROUNDスコア","PULLBACKスコア","BREAKOUTスコア",
         "当日出来高倍率","5日出来高倍率","上昇日出来高比率%",
         "4系統該当","TURNAROUND","PULLBACK","BREAKOUT"
     ] if c in df.columns]
+    # 表示候補側にも同名列が混ざってもArrow変換で落ちないよう最終防御
+    cols=list(dict.fromkeys(cols))
+    display_df=df.loc[:,~df.columns.duplicated(keep="first")][cols].reset_index(drop=True)
 
     st.caption(f"該当 {len(df)} 銘柄")
-    st.dataframe(df[cols].reset_index(drop=True),use_container_width=True,height=540,hide_index=True)
+    st.dataframe(display_df,use_container_width=True,height=540,hide_index=True)
     csv=df.to_csv(index=False,encoding="utf-8-sig").encode("utf-8-sig")
     st.download_button("📥 CSVで保存",data=csv,file_name=f"{key}.csv",mime="text/csv",key=f"dl_{key}")
 
