@@ -100,28 +100,50 @@ def render_rank_table(df,category=None,key="rank"):
         "RS Rating","出来高モメンタム","当日出来高倍率","5日出来高倍率","上昇日出来高比率%","終値"
     ])
 
+    # 今日見るべき: 実戦82以上 + RS80以上 + 出来高M60以上 + 過熱=適正
+    practical = pd.to_numeric(df.get("実戦スコア", pd.Series(0, index=df.index)), errors="coerce").fillna(0)
+    rs = pd.to_numeric(df.get("RS Rating", pd.Series(0, index=df.index)), errors="coerce").fillna(0)
+    volm = pd.to_numeric(df.get("出来高モメンタム", pd.Series(0, index=df.index)), errors="coerce").fillna(0)
+    heat = df.get("過熱判定", pd.Series("", index=df.index)).astype(str)
+    today_mask = (practical >= 82) & (rs >= 80) & (volm >= 60) & heat.str.contains("適正", na=False)
+    df["今日見るべき"] = np.where(today_mask, "🔥 今日見るべき", "")
+
     if category and f"{category}スコア" in df.columns:
         df=df[df[f"{category}スコア"].fillna(0)>0]
 
-    f1,f2,f3,f4,f5=st.columns([1.8,1.0,1.0,1.0,1.0])
+    f1,f2,f3,f4=st.columns([1.8,1.0,1.0,1.0])
     with f1:
         q=st.text_input("銘柄コード・銘柄名で検索",key=f"q_{key}")
     with f2:
-        min_score=st.slider("最低総合",0,100,0,5,key=f"min_{key}")
+        min_practical=st.slider("最低実戦",0,100,0,5,key=f"practical_{key}")
     with f3:
         min_rs=st.slider("最低RS",0,99,0,5,key=f"rs_{key}")
     with f4:
         min_vol=st.slider("最低出来高M",0,100,0,5,key=f"vol_{key}")
-    with f5:
+
+    g1,g2,g3,g4=st.columns([1.0,1.0,1.0,1.0])
+    with g1:
+        signal=st.selectbox("主力シグナル",["すべて","TURNAROUND","PULLBACK","BREAKOUT","EARNINGS"],key=f"signal_{key}")
+    with g2:
+        heat_filter=st.selectbox("過熱判定",["すべて","🟢 適正","🟡 注意","⚠️ 高"],key=f"heat_{key}")
+    with g3:
+        today_only=st.checkbox("🔥 今日見るべきだけ",value=False,key=f"today_{key}")
+    with g4:
         rank=st.selectbox("総合ランク",["すべて","S","A","B","C","D","E"],key=f"rank_{key}")
 
     df=filter_search(df,q)
-    if "総合スコア" in df.columns:
-        df=df[df["総合スコア"].fillna(0)>=min_score]
+    if "実戦スコア" in df.columns:
+        df=df[df["実戦スコア"].fillna(0)>=min_practical]
     if "RS Rating" in df.columns:
         df=df[df["RS Rating"].fillna(0)>=min_rs]
     if "出来高モメンタム" in df.columns:
         df=df[df["出来高モメンタム"].fillna(0)>=min_vol]
+    if signal!="すべて" and "主力シグナル" in df.columns:
+        df=df[df["主力シグナル"].astype(str)==signal]
+    if heat_filter!="すべて" and "過熱判定" in df.columns:
+        df=df[df["過熱判定"].astype(str)==heat_filter]
+    if today_only and "今日見るべき" in df.columns:
+        df=df[df["今日見るべき"].astype(str).ne("")]
     if rank!="すべて" and "総合ランク" in df.columns:
         df=df[df["総合ランク"].astype(str)==rank]
 
@@ -130,7 +152,7 @@ def render_rank_table(df,category=None,key="rank"):
         df=df.sort_values(sort_cols,ascending=[False]*len(sort_cols))
 
     cols=[c for c in [
-        "証券コード","Ticker","銘柄名","終値","実戦スコア","実戦ステータス","主力シグナル","主力品質",
+        "今日見るべき","証券コード","Ticker","銘柄名","終値","実戦スコア","実戦ステータス","主力シグナル","主力品質",
         "過熱判定","過熱ペナルティ","総合スコア","総合ランク",
         "RS Rating","出来高モメンタム","テクニカル総合","価格品質","パターン構造",
         "TURNAROUND品質","PULLBACK品質","BREAKOUT品質",
@@ -213,7 +235,7 @@ st.divider()
 
 if section=="🏆 総合ランキング":
     st.subheader("🏆 総合ランキング")
-    st.caption("総合スコアv5：総合評価に加え、該当系統の主力シグナルを抽出し「実戦スコア」と監視優先度を表示します。")
+    st.caption("総合スコアv5：実戦スコア・主力シグナル・過熱判定で優先順位を整理。『今日見るべき』は 実戦82以上・RS80以上・出来高M60以上・過熱適正 です。")
     render_rank_table(summary,key="overall")
 
 elif section=="🔥 決算モメンタム":
