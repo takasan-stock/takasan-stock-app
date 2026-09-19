@@ -89,7 +89,8 @@ def render_rank_table(df,category=None,key="rank"):
 
     df=numeric(df,[
         "総合スコア","TURNAROUNDスコア","PULLBACKスコア","BREAKOUTスコア",
-        "EARNINGSスコア","テクニカル総合","RS Rating","出来高モメンタム",
+        "EARNINGSスコア","テクニカル総合","パターン構造","価格品質","MA位置","MA傾き",
+        "52週高値近接","20日レンジ位置","RS Rating","出来高モメンタム",
         "当日出来高倍率","5日出来高倍率","上昇日出来高比率%","終値"
     ])
 
@@ -124,7 +125,8 @@ def render_rank_table(df,category=None,key="rank"):
 
     cols=[c for c in [
         "証券コード","Ticker","銘柄名","終値","総合スコア","総合ランク",
-        "RS Rating","出来高モメンタム","テクニカル総合","EARNINGSスコア",
+        "RS Rating","出来高モメンタム","テクニカル総合","価格品質","パターン構造",
+        "MA位置","MA傾き","52週高値近接","20日レンジ位置","EARNINGSスコア",
         "TURNAROUNDスコア","PULLBACKスコア","BREAKOUTスコア",
         "当日出来高倍率","5日出来高倍率","上昇日出来高比率%",
         "4系統該当","TURNAROUND","PULLBACK","BREAKOUT"
@@ -168,9 +170,9 @@ if not summary.empty:
     pull=int((summary["PULLBACKスコア"].fillna(0)>0).sum()) if "PULLBACKスコア" in summary.columns else 0
     brk=int((summary["BREAKOUTスコア"].fillna(0)>0).sum()) if "BREAKOUTスコア" in summary.columns else 0
     earn=int((summary["EARNINGSスコア"].fillna(0)>0).sum()) if "EARNINGSスコア" in summary.columns else len(earnings)
-    high=int((summary["総合スコア"].fillna(0)>=80).sum()) if "総合スコア" in summary.columns else 0
+    high75=int((summary["総合スコア"].fillna(0)>=75).sum()) if "総合スコア" in summary.columns else 0
     m=st.columns(5)
-    m[0].metric("🏆 総合80点以上",high)
+    m[0].metric("🏆 総合75点以上",high75)
     m[1].metric("🔄 TURNAROUND",turn)
     m[2].metric("🎯 PULLBACK",pull)
     m[3].metric("🚀 BREAKOUT",brk)
@@ -188,7 +190,7 @@ st.divider()
 
 if section=="🏆 総合ランキング":
     st.subheader("🏆 総合ランキング")
-    st.caption("テクニカル構造40%・RS25%・出来高15%・決算20%を基本配分として評価。決算データが無い銘柄は残り要素へ自動再配分します。")
+    st.caption("総合スコアv3：テクニカル40%・RS25%・出来高15%・決算20%。テクニカルはパターン構造60%＋価格品質40%で連続評価します。")
     render_rank_table(summary,key="overall")
 
 elif section=="🔥 決算モメンタム":
