@@ -33,7 +33,10 @@ def load_sheet(sheet_name:str)->pd.DataFrame:
             return pd.DataFrame()
         if values[0] in (["該当銘柄なし"],["該当データなし"]):
             return pd.DataFrame()
-        return pd.DataFrame(values[1:],columns=values[0])
+        df=pd.DataFrame(values[1:],columns=values[0])
+        # Google Sheets側に同名ヘッダーが残っていてもUIを落とさない
+        df=df.loc[:,~df.columns.duplicated(keep="first")].copy()
+        return df
     except Exception:
         return pd.DataFrame()
 
@@ -55,8 +58,8 @@ def fetch_chart_data(ticker:str,period:str="1y"):
 
 
 def numeric(df,cols):
-    out=df.copy()
-    for c in cols:
+    out=df.loc[:,~df.columns.duplicated(keep="first")].copy()
+    for c in dict.fromkeys(cols):
         if c in out.columns:
             out[c]=pd.to_numeric(out[c],errors="coerce")
     return out
@@ -92,7 +95,7 @@ def render_rank_table(df,category=None,key="rank"):
     df=numeric(df,[
         "総合スコア","TURNAROUNDスコア","PULLBACKスコア","BREAKOUTスコア",
         "EARNINGSスコア","実戦スコア","主力品質","テクニカル総合","パターン構造","価格品質",
-        "TURNAROUND品質","PULLBACK品質","BREAKOUT品質","過熱ペナルティ",
+        "TURNAROUND品質","PULLBACK品質","BREAKOUT品質",
         "20MA乖離%","50MA乖離%","MA傾き","52週高値距離%","20日レンジ位置","20日ブレイク距離%",
         "RS Rating","出来高モメンタム","当日出来高倍率","5日出来高倍率","上昇日出来高比率%","終値"
     ])
