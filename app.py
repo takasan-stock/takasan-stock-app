@@ -228,7 +228,7 @@ else:
 st.divider()
 sections=[
     "🏆 総合ランキング","🔥 決算モメンタム","🔄 底打ち転換","🎯 押し目","🚀 ブレイク",
-    "⭐ ウォッチリスト","📊 チャート","🔎 重複分析","⚙️ 詳細条件"
+    "⭐ ウォッチリスト","📊 チャート","🧪 実戦検証","🔎 重複分析","⚙️ 詳細条件"
 ]
 section=st.radio("表示",sections,horizontal=True,label_visibility="collapsed",key="main_section")
 st.divider()
@@ -314,6 +314,42 @@ elif section=="📊 チャート":
                 except Exception as e:
                     st.warning(f"チャート表示だけでエラーが発生しました: {type(e).__name__}")
                     st.caption("ランキング表示には影響ありません。")
+
+elif section=="🧪 実戦検証":
+    st.subheader("🧪 実戦スコア検証")
+    st.caption("『今日見るべき』銘柄をシグナル日終値で記録し、1・5・20営業日後の騰落率を自動追跡します。")
+    perf=load_sheet("実戦検証")
+    perf_summary=load_sheet("実戦検証サマリー")
+
+    if perf_summary.empty:
+        st.info("まだ検証データがありません。次回GitHub Actions実行後から記録が始まります。")
+    else:
+        ps=numeric(perf_summary,[
+            "登録件数","平均実戦スコア",
+            "1日後件数","1日後平均%","1日後中央値%","1日後勝率%",
+            "5日後件数","5日後平均%","5日後中央値%","5日後勝率%",
+            "20日後件数","20日後平均%","20日後中央値%","20日後勝率%"
+        ])
+        allrow=ps[ps["区分"].astype(str)=="ALL"] if "区分" in ps.columns else pd.DataFrame()
+        if not allrow.empty:
+            r=allrow.iloc[0]
+            cards=st.columns(4)
+            cards[0].metric("累計シグナル",int(r.get("登録件数",0) or 0))
+            cards[1].metric("5日後平均",f"{float(r.get('5日後平均%',0) or 0):+.2f}%")
+            cards[2].metric("5日後勝率",f"{float(r.get('5日後勝率%',0) or 0):.1f}%")
+            cards[3].metric("20日後平均",f"{float(r.get('20日後平均%',0) or 0):+.2f}%")
+
+        st.markdown("#### 主力シグナル別")
+        st.dataframe(ps,use_container_width=True,hide_index=True,height=260)
+
+    if not perf.empty:
+        st.markdown("#### シグナル履歴")
+        show_cols=[c for c in [
+            "シグナル日","証券コード","Ticker","銘柄名","主力シグナル","実戦スコア",
+            "RS Rating","出来高モメンタム","シグナル終値",
+            "1日後騰落率%","5日後騰落率%","20日後騰落率%","スコアバージョン"
+        ] if c in perf.columns]
+        st.dataframe(perf[show_cols],use_container_width=True,hide_index=True,height=480)
 
 elif section=="🔎 重複分析":
     st.subheader("🔎 重複分析")
