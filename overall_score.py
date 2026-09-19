@@ -1,5 +1,5 @@
 """
-4系統サマリーへ市場モメンタムを加えた総合スコア v4 を付与する。
+4系統サマリーへ市場モメンタムを加えた総合スコア v5 を付与する。
 
 総合スコアの基本配分:
 - テクニカル構造 40%
@@ -25,7 +25,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 
-SCORE_VERSION = "v4-regime-quality"
+SCORE_VERSION = "v5-actionability"
 
 TECH_MAX_PATTERNS = {
     "TURNAROUND": 2,
@@ -406,6 +406,27 @@ def weighted_available(parts: list[tuple[float, float]]) -> float:
     return sum(v * w for v, w in valid) / sum(w for _, w in valid)
 
 
+def action_status(score: float) -> str:
+    """実戦スコアを日々の確認優先度へ変換する。売買推奨ではなく監視優先度。"""
+    if score >= 82:
+        return "🔥 強い"
+    if score >= 72:
+        return "✅ 良好"
+    if score >= 62:
+        return "👀 監視"
+    return "⏸ 低優先"
+
+
+def heat_status(penalty: float) -> str:
+    if pd.isna(penalty):
+        return ""
+    if penalty >= 15:
+        return "⚠️ 高"
+    if penalty >= 7:
+        return "🟡 注意"
+    return "🟢 適正"
+
+
 def build_scores(summary: pd.DataFrame, earnings: pd.DataFrame) -> pd.DataFrame:
     earnings_map = {}
     if not earnings.empty and "Ticker" in earnings.columns:
@@ -485,6 +506,36 @@ def build_scores(summary: pd.DataFrame, earnings: pd.DataFrame) -> pd.DataFrame:
             (earnings_score, 0.20),
         ])
 
+        # 主力シグナル: 「実際に該当した系統」だけを対象に、
+        # パターン強度45% + その系統専用の価格品質55%で最も強い局面を選ぶ。
+        setup_scores = {}
+        for cat, pattern_sc in tech_scores.items():
+            if pattern_sc <= 0:
+                continue
+            q = m.get(f"{cat}品質", np.nan)
+            setup_scores[cat] = weighted_available([
+                (pattern_sc, 0.45),
+                (q, 0.55),
+            ])
+
+        if setup_scores:
+            main_signal = max(setup_scores, key=setup_scores.get)
+            main_signal_score = setup_scores[main_signal]
+        elif not pd.isna(earnings_score):
+            main_signal = "EARNINGS"
+            main_signal_score = float(earnings_score)
+        else:
+            main_signal = ""
+            main_signal_score = 0.0
+
+        # 実戦スコア: 総合評価65% + 主力セットアップ35%。
+        # v4の過熱ペナルティは各系統品質へ既に反映済みなので二重減点しない。
+        practical_score = weighted_available([
+            (overall, 0.65),
+            (main_signal_score, 0.35),
+        ])
+        overheat = m.get("過熱ペナルティ", np.nan)
+
         active_labels = [c for c, sc in tech_scores.items() if sc > 0]
         if not pd.isna(earnings_score):
             active_labels.append("EARNINGS")
@@ -512,6 +563,11 @@ def build_scores(summary: pd.DataFrame, earnings: pd.DataFrame) -> pd.DataFrame:
         r["5日出来高倍率"] = m.get("5日出来高倍率", "")
         r["上昇日出来高比率%"] = m.get("上昇日出来高比率%", "")
         r["RS母集団"] = m.get("RS母集団", "")
+        r["主力シグナル"] = main_signal
+        r["主力品質"] = round(float(main_signal_score), 1)
+        r["実戦スコア"] = int(round(max(0, min(100, practical_score))))
+        r["実戦ステータス"] = action_status(r["実戦スコア"])
+        r["過熱判定"] = heat_status(overheat)
         r["総合スコア"] = int(round(max(0, min(100, overall))))
         r["総合ランク"] = rank_score(r["総合スコア"])
         r["4系統該当"] = " + ".join(active_labels)
@@ -526,8 +582,9 @@ def build_scores(summary: pd.DataFrame, earnings: pd.DataFrame) -> pd.DataFrame:
     out["スコア更新日時"] = score_updated_at
 
     front = [
-        "証券コード", "Ticker", "銘柄名", "終値", "総合スコア", "総合ランク",
-        "スコアバージョン", "スコア更新日時",
+        "証券コード", "Ticker", "銘柄名", "終値",
+        "実戦スコア", "実戦ステータス", "主力シグナル", "主力品質", "過熱判定", "過熱ペナルティ",
+        "総合スコア", "総合ランク", "スコアバージョン", "スコア更新日時",
         "RS Rating", "出来高モメンタム", "テクニカル総合", "パターン構造", "価格品質",
         "TURNAROUND品質", "PULLBACK品質", "BREAKOUT品質", "過熱ペナルティ",
         "20MA乖離%", "50MA乖離%", "MA傾き", "52週高値距離%", "20日レンジ位置",
@@ -539,8 +596,8 @@ def build_scores(summary: pd.DataFrame, earnings: pd.DataFrame) -> pd.DataFrame:
     rest = [c for c in out.columns if c not in front]
     out = out[[c for c in front if c in out.columns] + rest]
     return out.sort_values(
-        ["総合スコア", "RS Rating", "出来高モメンタム", "Ticker"],
-        ascending=[False, False, False, True],
+        ["実戦スコア", "総合スコア", "RS Rating", "出来高モメンタム", "Ticker"],
+        ascending=[False, False, False, False, True],
     ).reset_index(drop=True)
 
 
@@ -553,7 +610,7 @@ def main():
     scored = build_scores(summary, earnings)
 
     write_sheet(sh, "4系統サマリー", scored)
-    print(f"総合スコアv4付与: {len(scored)}銘柄", flush=True)
+    print(f"総合スコアv5付与: {len(scored)}銘柄", flush=True)
     if not scored.empty and "RS母集団" in scored.columns:
         print(f"RS Rating母集団: {scored['RS母集団'].iloc[0]}", flush=True)
 
