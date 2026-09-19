@@ -5,7 +5,7 @@ import yfinance as yf
 import gspread
 from google.oauth2.service_account import Credentials
 
-EXPECTED_SCORE_VERSION="v4-regime-quality"
+EXPECTED_SCORE_VERSION="v5-actionability"
 
 st.set_page_config(page_title="日本株スクリーナー", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
@@ -91,7 +91,7 @@ def render_rank_table(df,category=None,key="rank"):
 
     df=numeric(df,[
         "総合スコア","TURNAROUNDスコア","PULLBACKスコア","BREAKOUTスコア",
-        "EARNINGSスコア","テクニカル総合","パターン構造","価格品質",
+        "EARNINGSスコア","実戦スコア","主力品質","テクニカル総合","パターン構造","価格品質",
         "TURNAROUND品質","PULLBACK品質","BREAKOUT品質","過熱ペナルティ",
         "20MA乖離%","50MA乖離%","MA傾き","52週高値距離%","20日レンジ位置","20日ブレイク距離%",
         "RS Rating","出来高モメンタム","当日出来高倍率","5日出来高倍率","上昇日出来高比率%","終値"
@@ -122,12 +122,13 @@ def render_rank_table(df,category=None,key="rank"):
     if rank!="すべて" and "総合ランク" in df.columns:
         df=df[df["総合ランク"].astype(str)==rank]
 
-    sort_cols=[c for c in ["総合スコア","RS Rating","出来高モメンタム"] if c in df.columns]
+    sort_cols=[c for c in ["実戦スコア","総合スコア","RS Rating","出来高モメンタム"] if c in df.columns]
     if sort_cols:
         df=df.sort_values(sort_cols,ascending=[False]*len(sort_cols))
 
     cols=[c for c in [
-        "証券コード","Ticker","銘柄名","終値","総合スコア","総合ランク",
+        "証券コード","Ticker","銘柄名","終値","実戦スコア","実戦ステータス","主力シグナル","主力品質",
+        "過熱判定","過熱ペナルティ","総合スコア","総合ランク",
         "RS Rating","出来高モメンタム","テクニカル総合","価格品質","パターン構造",
         "TURNAROUND品質","PULLBACK品質","BREAKOUT品質","過熱ペナルティ",
         "20MA乖離%","50MA乖離%","MA傾き","52週高値距離%","20日レンジ位置","20日ブレイク距離%",
@@ -154,7 +155,7 @@ with st.sidebar:
     st.page_link("pages/99_legacy.py",label="⚙️ A〜G 詳細条件を開く",icon="⚙️")
     st.page_link("pages/01_overview.py",label="🧭 4系統サマリー詳細",icon="🧭")
 
-st.title("📈 日本株スクリーナー v4")
+st.title("📈 日本株スクリーナー v5")
 st.caption("4系統 + 決算 + RS Rating + 出来高モメンタムで総合評価します。")
 
 summary=load_sheet("4系統サマリー")
@@ -186,8 +187,9 @@ if not summary.empty:
     brk=int((summary["BREAKOUTスコア"].fillna(0)>0).sum()) if "BREAKOUTスコア" in summary.columns else 0
     earn=int((summary["EARNINGSスコア"].fillna(0)>0).sum()) if "EARNINGSスコア" in summary.columns else len(earnings)
     high75=int((summary["総合スコア"].fillna(0)>=75).sum()) if "総合スコア" in summary.columns else 0
+    strong=int((pd.to_numeric(summary.get("実戦スコア",0),errors="coerce").fillna(0)>=82).sum()) if "実戦スコア" in summary.columns else 0
     m=st.columns(5)
-    m[0].metric("🏆 総合75点以上",high75)
+    m[0].metric("🔥 実戦82点以上",strong)
     m[1].metric("🔄 TURNAROUND",turn)
     m[2].metric("🎯 PULLBACK",pull)
     m[3].metric("🚀 BREAKOUT",brk)
@@ -205,7 +207,7 @@ st.divider()
 
 if section=="🏆 総合ランキング":
     st.subheader("🏆 総合ランキング")
-    st.caption("総合スコアv4：テクニカル40%・RS25%・出来高15%・決算20%。テクニカルはパターン構造60%＋系統別価格品質40%、さらに過熱を減点します。")
+    st.caption("総合スコアv5：総合評価に加え、該当系統の主力シグナルを抽出し「実戦スコア」と監視優先度を表示します。")
     render_rank_table(summary,key="overall")
 
 elif section=="🔥 決算モメンタム":
