@@ -5,6 +5,8 @@ import yfinance as yf
 import gspread
 from google.oauth2.service_account import Credentials
 
+EXPECTED_SCORE_VERSION="v3-continuous"
+
 st.set_page_config(page_title="日本株スクリーナー", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -162,6 +164,16 @@ if not log_df.empty:
     st.caption(f"最終スキャン: {last.get('最終実行日時','不明')} ｜ 対象 {last.get('対象銘柄数','-')} 銘柄 ｜ トリガー: {last.get('トリガー種別','-')}")
 
 if not summary.empty:
+    data_version = str(summary.iloc[0].get("スコアバージョン", "")).strip()
+    data_updated = str(summary.iloc[0].get("スコア更新日時", "")).strip()
+    if data_version != EXPECTED_SCORE_VERSION:
+        st.warning(
+            "⚠️ 表示UIは最新版ですが、ランキングデータは旧スコアのままです。"
+            " GitHub Actionsをmainで1回実行し、完了後に「最新の結果を再取得」を押してください。"
+        )
+    else:
+        st.success(f"✅ スコアデータ: {data_version} ｜ 更新: {data_updated or '不明'}")
+
     summary=numeric(summary,[
         "総合スコア","TURNAROUNDスコア","PULLBACKスコア","BREAKOUTスコア",
         "EARNINGSスコア","RS Rating","出来高モメンタム"
