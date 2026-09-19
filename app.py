@@ -5,7 +5,7 @@ import yfinance as yf
 import gspread
 from google.oauth2.service_account import Credentials
 
-EXPECTED_SCORE_VERSION="v3-continuous"
+EXPECTED_SCORE_VERSION="v4-regime-quality"
 
 st.set_page_config(page_title="日本株スクリーナー", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
@@ -91,9 +91,10 @@ def render_rank_table(df,category=None,key="rank"):
 
     df=numeric(df,[
         "総合スコア","TURNAROUNDスコア","PULLBACKスコア","BREAKOUTスコア",
-        "EARNINGSスコア","テクニカル総合","パターン構造","価格品質","MA位置","MA傾き",
-        "52週高値近接","20日レンジ位置","RS Rating","出来高モメンタム",
-        "当日出来高倍率","5日出来高倍率","上昇日出来高比率%","終値"
+        "EARNINGSスコア","テクニカル総合","パターン構造","価格品質",
+        "TURNAROUND品質","PULLBACK品質","BREAKOUT品質","過熱ペナルティ",
+        "20MA乖離%","50MA乖離%","MA傾き","52週高値距離%","20日レンジ位置","20日ブレイク距離%",
+        "RS Rating","出来高モメンタム","当日出来高倍率","5日出来高倍率","上昇日出来高比率%","終値"
     ])
 
     if category and f"{category}スコア" in df.columns:
@@ -128,7 +129,9 @@ def render_rank_table(df,category=None,key="rank"):
     cols=[c for c in [
         "証券コード","Ticker","銘柄名","終値","総合スコア","総合ランク",
         "RS Rating","出来高モメンタム","テクニカル総合","価格品質","パターン構造",
-        "MA位置","MA傾き","52週高値近接","20日レンジ位置","EARNINGSスコア",
+        "TURNAROUND品質","PULLBACK品質","BREAKOUT品質","過熱ペナルティ",
+        "20MA乖離%","50MA乖離%","MA傾き","52週高値距離%","20日レンジ位置","20日ブレイク距離%",
+        "EARNINGSスコア",
         "TURNAROUNDスコア","PULLBACKスコア","BREAKOUTスコア",
         "当日出来高倍率","5日出来高倍率","上昇日出来高比率%",
         "4系統該当","TURNAROUND","PULLBACK","BREAKOUT"
@@ -151,7 +154,7 @@ with st.sidebar:
     st.page_link("pages/99_legacy.py",label="⚙️ A〜G 詳細条件を開く",icon="⚙️")
     st.page_link("pages/01_overview.py",label="🧭 4系統サマリー詳細",icon="🧭")
 
-st.title("📈 日本株スクリーナー v3")
+st.title("📈 日本株スクリーナー v4")
 st.caption("4系統 + 決算 + RS Rating + 出来高モメンタムで総合評価します。")
 
 summary=load_sheet("4系統サマリー")
@@ -202,7 +205,7 @@ st.divider()
 
 if section=="🏆 総合ランキング":
     st.subheader("🏆 総合ランキング")
-    st.caption("総合スコアv3：テクニカル40%・RS25%・出来高15%・決算20%。テクニカルはパターン構造60%＋価格品質40%で連続評価します。")
+    st.caption("総合スコアv4：テクニカル40%・RS25%・出来高15%・決算20%。テクニカルはパターン構造60%＋系統別価格品質40%、さらに過熱を減点します。")
     render_rank_table(summary,key="overall")
 
 elif section=="🔥 決算モメンタム":
