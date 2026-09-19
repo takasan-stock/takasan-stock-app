@@ -15,6 +15,8 @@ RS Rating は4系統サマリー内の候補銘柄を母集団にした1〜99の
 import os
 import json
 import math
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -22,6 +24,8 @@ import yfinance as yf
 import gspread
 from google.oauth2.service_account import Credentials
 
+
+SCORE_VERSION = "v3-continuous"
 
 TECH_MAX_PATTERNS = {
     "TURNAROUND": 2,
@@ -444,8 +448,13 @@ def build_scores(summary: pd.DataFrame, earnings: pd.DataFrame) -> pd.DataFrame:
     if out.empty:
         return out
 
+    score_updated_at = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d %H:%M:%S JST")
+    out["スコアバージョン"] = SCORE_VERSION
+    out["スコア更新日時"] = score_updated_at
+
     front = [
         "証券コード", "Ticker", "銘柄名", "終値", "総合スコア", "総合ランク",
+        "スコアバージョン", "スコア更新日時",
         "RS Rating", "出来高モメンタム", "テクニカル総合", "パターン構造", "価格品質",
         "MA位置", "MA傾き", "52週高値近接", "20日レンジ位置", "EARNINGSスコア",
         "TURNAROUNDスコア", "PULLBACKスコア", "BREAKOUTスコア",
