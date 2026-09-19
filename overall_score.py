@@ -62,7 +62,8 @@ def read_sheet(sh, sheet_name):
         return pd.DataFrame()
     if values[0] in (["該当銘柄なし"], ["該当データなし"]):
         return pd.DataFrame()
-    return pd.DataFrame(values[1:], columns=values[0])
+    df = pd.DataFrame(values[1:], columns=values[0])
+    return df.loc[:, ~df.columns.duplicated(keep="first")].copy()
 
 
 def write_sheet(sh, sheet_name, df):
@@ -76,7 +77,8 @@ def write_sheet(sh, sheet_name, df):
         ws.update([["該当データなし"]])
         return
 
-    out = df.copy().replace([np.inf, -np.inf], np.nan).fillna("").astype(str)
+    out = df.loc[:, ~df.columns.duplicated(keep="first")].copy()
+    out = out.replace([np.inf, -np.inf], np.nan).fillna("").astype(str)
     ws.update([out.columns.tolist()] + out.values.tolist())
 
 
@@ -586,7 +588,7 @@ def build_scores(summary: pd.DataFrame, earnings: pd.DataFrame) -> pd.DataFrame:
         "実戦スコア", "実戦ステータス", "主力シグナル", "主力品質", "過熱判定", "過熱ペナルティ",
         "総合スコア", "総合ランク", "スコアバージョン", "スコア更新日時",
         "RS Rating", "出来高モメンタム", "テクニカル総合", "パターン構造", "価格品質",
-        "TURNAROUND品質", "PULLBACK品質", "BREAKOUT品質", "過熱ペナルティ",
+        "TURNAROUND品質", "PULLBACK品質", "BREAKOUT品質",
         "20MA乖離%", "50MA乖離%", "MA傾き", "52週高値距離%", "20日レンジ位置",
         "20日ブレイク距離%", "EARNINGSスコア",
         "TURNAROUNDスコア", "PULLBACKスコア", "BREAKOUTスコア",
