@@ -1,5 +1,5 @@
 """
-4系統サマリーへ市場モメンタムを加えた総合スコア v3 を付与する。
+4系統サマリーへ市場モメンタムを加えた総合スコア v4 を付与する。
 
 総合スコアの基本配分:
 - テクニカル構造 40%
@@ -25,7 +25,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 
-SCORE_VERSION = "v3-continuous"
+SCORE_VERSION = "v4-regime-quality"
 
 TECH_MAX_PATTERNS = {
     "TURNAROUND": 2,
@@ -182,6 +182,23 @@ def _linear_score(x: float, low: float, high: float) -> float:
     return max(0.0, min(100.0, (x - low) / (high - low) * 100.0))
 
 
+def _band_score(x: float, ideal_low: float, ideal_high: float, hard_low: float, hard_high: float) -> float:
+    """理想帯を100点、許容帯の外端を0点として両側を線形補間する。"""
+    if pd.isna(x):
+        return np.nan
+    if hard_high <= hard_low or ideal_high < ideal_low:
+        return np.nan
+    if ideal_low <= x <= ideal_high:
+        return 100.0
+    if x < ideal_low:
+        if x <= hard_low:
+            return 0.0
+        return max(0.0, min(100.0, (x - hard_low) / (ideal_low - hard_low) * 100.0))
+    if x >= hard_high:
+        return 0.0
+    return max(0.0, min(100.0, (hard_high - x) / (hard_high - ideal_high) * 100.0))
+
+
 def volume_momentum_score(df: pd.DataFrame) -> tuple[float, float, float, float]:
     """
     戻り値: (0-100点, 当日出来高倍率, 5日出来高倍率, 10日上昇日出来高比率)
@@ -222,18 +239,23 @@ def volume_momentum_score(df: pd.DataFrame) -> tuple[float, float, float, float]
 
 def price_technical_quality(df: pd.DataFrame) -> dict:
     """
-    パターン該当の有無とは別に、株価そのものの質を0〜100点で連続評価する。
-    評価要素:
-    - 終値の20/50/200日線に対する位置
-    - 20/50日線の傾き
-    - 52週高値からの距離
-    - 20日レンジ内の位置
+    v4: TURNAROUND / PULLBACK / BREAKOUT ごとに「良い価格位置」を別定義する。
+    一律に「MAより上=100」「高値圏=100」とせず、過熱も減点する。
     """
     close = _safe_series(df, "Close")
     if len(close) < 55:
         return {
-            "価格品質": np.nan, "MA位置": np.nan, "MA傾き": np.nan,
-            "52週高値近接": np.nan, "20日レンジ位置": np.nan,
+            "価格品質": np.nan,
+            "TURNAROUND品質": np.nan,
+            "PULLBACK品質": np.nan,
+            "BREAKOUT品質": np.nan,
+            "過熱ペナルティ": np.nan,
+            "20MA乖離%": np.nan,
+            "50MA乖離%": np.nan,
+            "MA傾き": np.nan,
+            "52週高値距離%": np.nan,
+            "20日レンジ位置": np.nan,
+            "20日ブレイク距離%": np.nan,
         }
 
     last = float(close.iloc[-1])
@@ -241,50 +263,86 @@ def price_technical_quality(df: pd.DataFrame) -> dict:
     ma50 = float(close.iloc[-50:].mean())
     ma200 = float(close.iloc[-200:].mean()) if len(close) >= 200 else np.nan
 
-    # MA位置: 20日・50日を重視。200日は取得できる場合のみ加点。
-    pos_parts = [
-        (100.0 if last >= ma20 else _linear_score(last / ma20, 0.90, 1.00), 0.35),
-        (100.0 if last >= ma50 else _linear_score(last / ma50, 0.88, 1.00), 0.35),
-    ]
-    if not pd.isna(ma200):
-        pos_parts.append((100.0 if last >= ma200 else _linear_score(last / ma200, 0.85, 1.00), 0.30))
-    ma_position = weighted_available(pos_parts)
+    dev20 = (last / ma20 - 1.0) * 100.0 if ma20 > 0 else np.nan
+    dev50 = (last / ma50 - 1.0) * 100.0 if ma50 > 0 else np.nan
+    dev200 = (last / ma200 - 1.0) * 100.0 if not pd.isna(ma200) and ma200 > 0 else np.nan
 
-    # MA傾き: 5営業日前との比較。20MAをやや重め。
     ma20_prev = float(close.iloc[-25:-5].mean()) if len(close) >= 25 else np.nan
     ma50_prev = float(close.iloc[-55:-5].mean()) if len(close) >= 55 else np.nan
-    slope20 = ((ma20 / ma20_prev) - 1.0) * 100 if ma20_prev and ma20_prev > 0 else np.nan
-    slope50 = ((ma50 / ma50_prev) - 1.0) * 100 if ma50_prev and ma50_prev > 0 else np.nan
-    slope20_score = _linear_score(slope20, -2.0, 3.0)
-    slope50_score = _linear_score(slope50, -1.5, 2.5)
-    ma_slope = weighted_available([(slope20_score, 0.60), (slope50_score, 0.40)])
+    slope20 = ((ma20 / ma20_prev) - 1.0) * 100.0 if ma20_prev and ma20_prev > 0 else np.nan
+    slope50 = ((ma50 / ma50_prev) - 1.0) * 100.0 if ma50_prev and ma50_prev > 0 else np.nan
+    slope_score = weighted_available([
+        (_band_score(slope20, 0.10, 2.50, -2.0, 5.0), 0.60),
+        (_band_score(slope50, 0.00, 1.80, -1.5, 3.5), 0.40),
+    ])
 
-    # 52週高値に近いほど強い。ただし高値そのものだけで満点にしない。
     lookback = close.tail(min(252, len(close)))
     hi52 = float(lookback.max()) if not lookback.empty else np.nan
-    dist52 = (last / hi52) if hi52 and hi52 > 0 else np.nan
-    high52_score = _linear_score(dist52, 0.75, 1.00)
+    dist52_pct = (last / hi52 - 1.0) * 100.0 if hi52 and hi52 > 0 else np.nan
 
-    # 20日レンジ内の位置。高値圏ほど高得点。
     c20 = close.tail(20)
     lo20 = float(c20.min())
     hi20 = float(c20.max())
     range20 = ((last - lo20) / (hi20 - lo20) * 100.0) if hi20 > lo20 else 50.0
 
-    quality = weighted_available([
-        (ma_position, 0.35),
-        (ma_slope, 0.25),
-        (high52_score, 0.20),
-        (range20, 0.20),
-    ])
-    return {
-        "価格品質": round(quality, 1),
-        "MA位置": round(ma_position, 1),
-        "MA傾き": round(ma_slope, 1),
-        "52週高値近接": round(high52_score, 1),
-        "20日レンジ位置": round(range20, 1),
-    }
+    prior20 = close.iloc[-21:-1] if len(close) >= 21 else close.iloc[:-1]
+    prior20_hi = float(prior20.max()) if not prior20.empty else np.nan
+    breakout20_pct = (last / prior20_hi - 1.0) * 100.0 if prior20_hi and prior20_hi > 0 else np.nan
 
+    # 過熱ペナルティ: 20MAから+8%、50MAから+15%を超えると段階的に減点。
+    p20 = _linear_score(dev20, 8.0, 18.0)
+    p50 = _linear_score(dev50, 15.0, 30.0)
+    p20 = 0.0 if pd.isna(p20) else p20 * 0.15
+    p50 = 0.0 if pd.isna(p50) else p50 * 0.10
+    overheat_penalty = min(25.0, p20 + p50)
+
+    # TURNAROUND: 立ち上がりを評価。高値張り付きや上方乖離し過ぎは不要。
+    turn = weighted_available([
+        (_band_score(dev50, -2.0, 8.0, -10.0, 18.0), 0.25),
+        (_band_score(dev200, -3.0, 10.0, -15.0, 25.0), 0.15),
+        (slope_score, 0.30),
+        (_band_score(dist52_pct, -22.0, -5.0, -45.0, 2.0), 0.15),
+        (_band_score(range20, 55.0, 90.0, 20.0, 100.0), 0.15),
+    ])
+    turn = max(0.0, turn - overheat_penalty)
+
+    # PULLBACK: 上昇トレンドを保ちながら20/50MA付近へ健全に押している形。
+    pull = weighted_available([
+        (_band_score(dev20, -2.5, 4.0, -8.0, 10.0), 0.30),
+        (_band_score(dev50, 0.0, 10.0, -6.0, 20.0), 0.20),
+        (slope_score, 0.25),
+        (_band_score(dist52_pct, -15.0, -1.0, -32.0, 2.0), 0.15),
+        (_band_score(range20, 40.0, 82.0, 15.0, 100.0), 0.10),
+    ])
+    pull = max(0.0, pull - overheat_penalty)
+
+    # BREAKOUT: 20日高値付近/突破、上向きMA、52週高値圏を評価。
+    # ブレイク局面では多少の乖離を許容するが、伸び過ぎは減点。
+    brk = weighted_available([
+        (_band_score(breakout20_pct, -1.5, 4.0, -7.0, 12.0), 0.30),
+        (_band_score(dev20, 1.0, 7.0, -3.0, 14.0), 0.20),
+        (slope_score, 0.20),
+        (_band_score(dist52_pct, -8.0, 0.0, -22.0, 2.0), 0.20),
+        (_band_score(range20, 78.0, 100.0, 50.0, 101.0), 0.10),
+    ])
+    brk = max(0.0, brk - overheat_penalty * 0.70)
+
+    # 参考用の総合価格品質。実際の銘柄評価では該当系統の品質だけを採用する。
+    generic = weighted_available([(turn, 1.0), (pull, 1.0), (brk, 1.0)])
+
+    return {
+        "価格品質": round(generic, 1),
+        "TURNAROUND品質": round(turn, 1),
+        "PULLBACK品質": round(pull, 1),
+        "BREAKOUT品質": round(brk, 1),
+        "過熱ペナルティ": round(overheat_penalty, 1),
+        "20MA乖離%": round(dev20, 1) if not pd.isna(dev20) else np.nan,
+        "50MA乖離%": round(dev50, 1) if not pd.isna(dev50) else np.nan,
+        "MA傾き": round(slope_score, 1),
+        "52週高値距離%": round(dist52_pct, 1) if not pd.isna(dist52_pct) else np.nan,
+        "20日レンジ位置": round(range20, 1),
+        "20日ブレイク距離%": round(breakout20_pct, 1) if not pd.isna(breakout20_pct) else np.nan,
+    }
 
 def fetch_market_scores(tickers: list[str]) -> pd.DataFrame:
     """候補銘柄をまとめて取得し、RS原点と出来高モメンタムを算出。"""
@@ -401,8 +459,17 @@ def build_scores(summary: pd.DataFrame, earnings: pd.DataFrame) -> pd.DataFrame:
         pattern_structure = technical_structure_score(tech_scores)
         earnings_score = earnings_map.get(ticker, {}).get("score", np.nan)
         m = market_map.get(ticker, {})
-        price_quality = m.get("価格品質", np.nan)
-        # パターン構造60% + 株価の連続品質40%で横並びを解消
+        # 該当している系統だけ、その系統専用の価格品質を採用する。
+        regime_quality_parts = []
+        for cat, sc in tech_scores.items():
+            if sc > 0:
+                regime_quality_parts.append((m.get(f"{cat}品質", np.nan), sc))
+        if regime_quality_parts:
+            price_quality = weighted_available(regime_quality_parts)
+        else:
+            price_quality = m.get("価格品質", np.nan)
+
+        # パターン構造60% + 系統別価格品質40%
         technical_total = weighted_available([
             (pattern_structure, 0.60),
             (price_quality, 0.40),
@@ -428,10 +495,16 @@ def build_scores(summary: pd.DataFrame, earnings: pd.DataFrame) -> pd.DataFrame:
         r["EARNINGSスコア"] = int(round(earnings_score)) if not pd.isna(earnings_score) else 0
         r["パターン構造"] = int(round(pattern_structure))
         r["価格品質"] = round(float(price_quality), 1) if not pd.isna(price_quality) else ""
-        r["MA位置"] = m.get("MA位置", "")
+        r["TURNAROUND品質"] = m.get("TURNAROUND品質", "")
+        r["PULLBACK品質"] = m.get("PULLBACK品質", "")
+        r["BREAKOUT品質"] = m.get("BREAKOUT品質", "")
+        r["過熱ペナルティ"] = m.get("過熱ペナルティ", "")
+        r["20MA乖離%"] = m.get("20MA乖離%", "")
+        r["50MA乖離%"] = m.get("50MA乖離%", "")
         r["MA傾き"] = m.get("MA傾き", "")
-        r["52週高値近接"] = m.get("52週高値近接", "")
+        r["52週高値距離%"] = m.get("52週高値距離%", "")
         r["20日レンジ位置"] = m.get("20日レンジ位置", "")
+        r["20日ブレイク距離%"] = m.get("20日ブレイク距離%", "")
         r["テクニカル総合"] = int(round(technical_total))
         r["RS Rating"] = int(round(rs_rating)) if not pd.isna(rs_rating) else ""
         r["出来高モメンタム"] = round(float(vol_momentum), 1) if not pd.isna(vol_momentum) else ""
@@ -456,7 +529,9 @@ def build_scores(summary: pd.DataFrame, earnings: pd.DataFrame) -> pd.DataFrame:
         "証券コード", "Ticker", "銘柄名", "終値", "総合スコア", "総合ランク",
         "スコアバージョン", "スコア更新日時",
         "RS Rating", "出来高モメンタム", "テクニカル総合", "パターン構造", "価格品質",
-        "MA位置", "MA傾き", "52週高値近接", "20日レンジ位置", "EARNINGSスコア",
+        "TURNAROUND品質", "PULLBACK品質", "BREAKOUT品質", "過熱ペナルティ",
+        "20MA乖離%", "50MA乖離%", "MA傾き", "52週高値距離%", "20日レンジ位置",
+        "20日ブレイク距離%", "EARNINGSスコア",
         "TURNAROUNDスコア", "PULLBACKスコア", "BREAKOUTスコア",
         "当日出来高倍率", "5日出来高倍率", "上昇日出来高比率%", "RS母集団",
         "4系統該当", "該当系統数", "該当系統", "TURNAROUND", "PULLBACK", "BREAKOUT", "元パターン合計",
@@ -478,7 +553,7 @@ def main():
     scored = build_scores(summary, earnings)
 
     write_sheet(sh, "4系統サマリー", scored)
-    print(f"総合スコアv3付与: {len(scored)}銘柄", flush=True)
+    print(f"総合スコアv4付与: {len(scored)}銘柄", flush=True)
     if not scored.empty and "RS母集団" in scored.columns:
         print(f"RS Rating母集団: {scored['RS母集団'].iloc[0]}", flush=True)
 
