@@ -88,9 +88,9 @@ def as_num(v):
 
 
 def today_watch_mask(df):
-    practical = pd.to_numeric(df.get("実戦スコア"), errors="coerce")
-    rs = pd.to_numeric(df.get("RS Rating"), errors="coerce")
-    volm = pd.to_numeric(df.get("出来高モメンタム"), errors="coerce")
+    practical = pd.to_numeric(df.get("実戦スコア", pd.Series(np.nan, index=df.index)), errors="coerce")
+    rs = pd.to_numeric(df.get("RS Rating", pd.Series(np.nan, index=df.index)), errors="coerce")
+    volm = pd.to_numeric(df.get("出来高モメンタム", pd.Series(np.nan, index=df.index)), errors="coerce")
     heat = df.get("過熱判定", pd.Series("", index=df.index)).astype(str)
     return (
         practical.ge(82)
@@ -303,6 +303,24 @@ def update_forward_returns(records, histories):
     return records
 
 
+def normalize_records_for_sort(records):
+    """Google Sheets由来の文字列と新規数値行が混在しても安定して並べ替える。"""
+    if records.empty:
+        return records
+
+    out = records.copy()
+    out["_sort_signal_date"] = pd.to_datetime(out.get("シグナル日"), errors="coerce")
+    out["_sort_practical"] = pd.to_numeric(out.get("実戦スコア"), errors="coerce")
+    out["_sort_ticker"] = out.get("Ticker", pd.Series("", index=out.index)).astype(str)
+
+    out = out.sort_values(
+        ["_sort_signal_date", "_sort_practical", "_sort_ticker"],
+        ascending=[False, False, True],
+        na_position="last",
+    ).reset_index(drop=True)
+    return out.drop(columns=["_sort_signal_date", "_sort_practical", "_sort_ticker"], errors="ignore")
+
+
 def build_summary(records):
     if records.empty:
         return pd.DataFrame()
@@ -355,13 +373,16 @@ def main():
     else:
         start_date = datetime.now(JST).date() - timedelta(days=400)
 
+    print(f"[実戦検証] 対象Ticker数: {len(tickers)} / 株価取得開始: {start_date}", flush=True)
     histories = download_histories(sorted(tickers), start_date)
+    print(f"[実戦検証] 株価取得成功: {sum(1 for v in histories.values() if v is not None and not v.empty)}", flush=True)
+
+    before = len(records)
     records = add_new_signals(records, current, histories)
+    print(f"[実戦検証] 新規登録: {len(records) - before}件", flush=True)
+
     records = update_forward_returns(records, histories)
-
-    if not records.empty:
-        records = records.sort_values(["シグナル日", "実戦スコア", "Ticker"], ascending=[False, False, True]).reset_index(drop=True)
-
+    records = normalize_records_for_sort(records)
     summary = build_summary(records)
 
     write_sheet(sh, TRACK_SHEET, records)
