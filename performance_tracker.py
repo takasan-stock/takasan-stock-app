@@ -19,6 +19,7 @@ Google Sheets:
 
 import os
 import json
+import traceback
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -362,10 +363,18 @@ def main():
     current = read_sheet(sh, "4系統サマリー")
     records = ensure_record_columns(read_sheet(sh, TRACK_SHEET))
 
+    # 株価取得は「既存の検証銘柄 + 今日見るべき銘柄」だけに限定する。
+    # 4系統サマリー全銘柄を毎回取得しないことで、yfinance負荷と失敗率を下げる。
     tickers = set(records.get("Ticker", pd.Series(dtype=str)).astype(str).str.strip())
+    flagged_current = pd.DataFrame()
     if not current.empty:
-        tickers.update(current.get("Ticker", pd.Series(dtype=str)).astype(str).str.strip())
+        try:
+            flagged_current = current[today_watch_mask(current)].copy()
+            tickers.update(flagged_current.get("Ticker", pd.Series(dtype=str)).astype(str).str.strip())
+        except Exception as e:
+            print(f"::warning::今日見るべき抽出に失敗: {type(e).__name__}: {e}", flush=True)
     tickers.discard("")
+    tickers.discard("nan")
 
     if not records.empty and "シグナル日" in records.columns:
         dates = pd.to_datetime(records["シグナル日"], errors="coerce").dropna()
@@ -378,15 +387,44 @@ def main():
     print(f"[実戦検証] 株価取得成功: {sum(1 for v in histories.values() if v is not None and not v.empty)}", flush=True)
 
     before = len(records)
-    records = add_new_signals(records, current, histories)
-    print(f"[実戦検証] 新規登録: {len(records) - before}件", flush=True)
+    try:
+        records = add_new_signals(records, current, histories)
+        print(f"[実戦検証] 新規登録: {len(records) - before}件", flush=True)
+    except Exception as e:
+        print(f"::warning::新規シグナル登録をスキップ: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
 
-    records = update_forward_returns(records, histories)
-    records = normalize_records_for_sort(records)
-    summary = build_summary(records)
+    try:
+        records = update_forward_returns(records, histories)
+    except Exception as e:
+        print(f"::warning::事後騰落率更新をスキップ: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
 
-    write_sheet(sh, TRACK_SHEET, records)
-    write_sheet(sh, SUMMARY_SHEET, summary)
+    try:
+        records = normalize_records_for_sort(records)
+    except Exception as e:
+        print(f"::warning::検証履歴ソートをスキップ: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+
+    try:
+        summary = build_summary(records)
+    except Exception as e:
+        print(f"::warning::検証サマリー集計をスキップ: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        summary = pd.DataFrame()
+
+    # 履歴とサマリーは個別に保存。片方が失敗してももう片方は残す。
+    try:
+        write_sheet(sh, TRACK_SHEET, records)
+    except Exception as e:
+        print(f"::warning::実戦検証シート保存失敗: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+
+    try:
+        write_sheet(sh, SUMMARY_SHEET, summary)
+    except Exception as e:
+        print(f"::warning::実戦検証サマリー保存失敗: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
 
     new_today = 0
     if not current.empty:
@@ -395,4 +433,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"::warning::実戦検証の更新を中断しました: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        # 実戦検証は補助機能。コアスキャンを赤判定にしない。
+        raise SystemExit(0)
