@@ -59,7 +59,13 @@ jobs:
         run: python overall_score.py
 
       - name: 実戦スコアの事後成績を記録
+        id: performance_tracker
+        continue-on-error: true
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: python performance_tracker.py
+
+      - name: 実戦検証エラーを警告
+        if: steps.performance_tracker.outcome == 'failure'
+        run: echo "::warning::実戦検証の更新に失敗しました。コアの全銘柄スキャンと総合スコア更新は正常完了しています。"
