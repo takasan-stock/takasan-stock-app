@@ -63,7 +63,7 @@ else:
 
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("🏆 総合80点以上", int((summary.get("総合スコア", pd.Series(dtype=float)).fillna(0) >= 80).sum()))
-    m2.metric("🔄 TURNAROUND", turn_count, help="週足A + GC底打ちF")
+    m2.metric("🔄 TURNAROUND", turn_count, help="週足A + 週足転換H + GC底打ちF")
     m3.metric("🎯 PULLBACK", pull_count, help="日足B1 + 日足B2 + 初押しD")
     m4.metric("🚀 BREAKOUT", break_count, help="ボリバンC + 出来高E + ポケットピボットG")
     m5.metric("🔥 EARNINGS", earn_count, help="決算モメンタム")

@@ -28,7 +28,7 @@ from google.oauth2.service_account import Credentials
 SCORE_VERSION = "v5-actionability"
 
 TECH_MAX_PATTERNS = {
-    "TURNAROUND": 2,
+    "TURNAROUND": 3,
     "PULLBACK": 3,
     "BREAKOUT": 3,
 }

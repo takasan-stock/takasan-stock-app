@@ -1,7 +1,7 @@
 """
 既存A〜Gスクリーニング結果を壊さずに、4系統の上位分類と重複分析を追加する。
 
-- TURNAROUND : 週足A / GC底打ちF
+- TURNAROUND : 週足A / 週足転換H / GC底打ちF
 - PULLBACK   : 日足B1 / 日足B2 / 初押しD
 - BREAKOUT   : ボリバンC / 出来高E / ポケピG
 - EARNINGS   : 決算モメンタム（既存シートをそのまま参照）
@@ -25,6 +25,7 @@ CATEGORY_MAP = {
         "label": "底打ち転換",
         "patterns": {
             "週足パターンA": "週A",
+            "週足転換H": "週H",
             "GC底打ちF21x200": "GC底打ちF",
         },
     },
