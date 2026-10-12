@@ -251,7 +251,7 @@ elif section=="🔥 決算モメンタム":
 
 elif section=="🔄 底打ち転換":
     st.subheader("🔄 TURNAROUND｜底打ち転換")
-    st.caption("週足A + GC底打ちF。下降トレンド終了〜上昇転換の候補。")
+    st.caption("週足A + 週足転換H + GC底打ちF。週足の初動・ベース反転・再加速をまとめて評価します。")
     render_rank_table(summary,"TURNAROUND","turnaround")
 
 elif section=="🎯 押し目":
