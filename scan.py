@@ -31,7 +31,7 @@ from google.oauth2.service_account import Credentials
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-09-07-v14-jpx-xlsx-fix"
+SCAN_PY_VERSION = "2026-10-12-v15-weekly-turnaround-score"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -64,6 +64,15 @@ A_MAX_EXTENDED   = 25.0  # 終値が40週MAから何%以上離れたら「初動
 A_RSI_MIN        = 40.0  # 底打ち初動のRSI下限（弱い反発を除外）
 A_RSI_MAX        = 85.0  # RSI上限は安全弁のみ。上抜け初動はRSIが高く出るのが自然なため広め
                          # （行き過ぎの抑制は A_MAX_EXTENDED が担当する）
+
+# ── 週足転換H: 画像に近い「ベース反転 / 再加速 / 初動」をスコア化 ──
+# A/Fを置き換えず、TURNAROUND内の追加確認シグナルとして使う。
+H_SCORE_MIN       = 68.0   # 抽出下限。70前後から「形が整った」候補
+H_BASE_WEEKS      = 16     # 週足ベースの幅を測る期間
+H_HIGH_LOOKBACK   = 13     # 直近高値への接近/突破判定
+H_MAX_DIST20      = 30.0   # 20週MAから30%以上上方乖離は過熱として除外
+H_MIN_WEEKS       = 60     # 最低データ本数
+
 BAND21_PCT = 0.025
 BAND50_PCT = 0.04
 
@@ -281,8 +290,10 @@ def download_batch(batch: list, period: str, interval: str, label: str = "") -> 
 def calc_weekly(df: pd.DataFrame) -> pd.DataFrame:
     c = df["Close"]
     df["MA5"]          = c.rolling(5).mean()
-    df["WMA20"]        = c.rolling(20).mean()   # 週足20SMA（パターンD用）
+    df["MA10W"]        = c.rolling(10).mean()
+    df["WMA20"]        = c.rolling(20).mean()   # 週足20SMA（パターンD/H用）
     df["MA40"]         = c.rolling(40).mean()
+    df["VOL10W"]       = df["Volume"].rolling(10).mean() if "Volume" in df.columns else np.nan
     df["BAND5_U"]      = df["MA5"]  * (1 + BAND5_PCT)
     df["BAND5_L"]      = df["MA5"]  * (1 - BAND5_PCT)
     df["BAND40_U"]     = df["MA40"] * (1 + BAND40_PCT)
@@ -295,8 +306,9 @@ def calc_weekly(df: pd.DataFrame) -> pd.DataFrame:
     df["MA40_s8"]      = df["MA40"].pct_change(8) * 100
     df["MA40_s8_prev"] = df["MA40_s8"].shift(4)
     df["WMA20_s4"]     = df["WMA20"].pct_change(4) * 100  # 週足20SMAの傾き
-    df["MA40_s4b"]     = df["MA40"].pct_change(4) * 100   # 週足40SMAの傾き（別名）
-    df["MA5_s4"]       = df["MA5"].pct_change(4) * 100    # 週足5SMAの傾き（パターンA底打ち用）
+    df["MA40_s4b"]      = df["MA40"].pct_change(4) * 100   # 週足40SMAの傾き（別名）
+    df["MA5_s4"]        = df["MA5"].pct_change(4) * 100    # 週足5SMAの傾き（パターンA底打ち用）
+    df["MA10W_s4"]      = df["MA10W"].pct_change(4) * 100
     return df
 
 def calc_daily(df: pd.DataFrame) -> pd.DataFrame:
@@ -452,6 +464,187 @@ def check_a(df: pd.DataFrame, ctr: dict) -> dict | None:
         "rsi": round(rsi, 1),
         "weeks_since_cross": 999,   # 押し目は上抜け直後ではないため大きい値
     }
+
+
+def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
+    """
+    週足転換H:
+    たかさんの参考チャートに共通する「形の良い週足転換」を0〜100で採点する。
+
+    3タイプ:
+      EARLY_TURN : 長期調整後、20/40週線が改善して立ち上がる初動
+      BASE_TURN  : 8〜20週程度のベースを作り、レンジ上限へ戻る形
+      REACCEL    : 上昇トレンド中の調整完了から52週高値方向へ再加速
+
+    厳しいAND条件ではなくスコア方式にすることで、
+    エレコム / ベイカレント / SEMITEC / 日本電子 / メイテック型の
+    「完全に同じではないが共通して良い週足」をまとめて拾う。
+    """
+    def drop(k):
+        ctr[k] = ctr.get(k, 0) + 1
+        return None
+
+    need = ["Open","High","Low","Close","Volume","MA5","MA10W","WMA20","MA40",
+            "WMA20_s4","MA40_s4b","RSI","VOL10W"]
+    d = df.dropna(subset=need).copy()
+    if len(d) < H_MIN_WEEKS:
+        return drop("H_データ不足")
+
+    d = d.iloc[-80:]
+    cur = d.iloc[-1]
+    close = float(cur["Close"])
+    open_ = float(cur["Open"])
+    ma5 = float(cur["MA5"])
+    ma10 = float(cur["MA10W"])
+    ma20 = float(cur["WMA20"])
+    ma40 = float(cur["MA40"])
+    s20 = float(cur["WMA20_s4"])
+    s40 = float(cur["MA40_s4b"])
+    rsi = float(cur["RSI"])
+    vol = float(cur["Volume"])
+    vol10 = float(cur["VOL10W"]) if float(cur["VOL10W"]) > 0 else np.nan
+
+    if min(close, ma20, ma40) <= 0:
+        return drop("H_価格異常")
+
+    dist20 = (close / ma20 - 1.0) * 100.0
+    dist40 = (close / ma40 - 1.0) * 100.0
+    if dist20 > H_MAX_DIST20:
+        return drop("H_20週線から過熱")
+    if dist40 < -12.0:
+        return drop("H_40週線より下すぎ")
+
+    w52 = d.iloc[-52:]
+    high52 = float(w52["High"].max())
+    low52 = float(w52["Low"].min())
+    high52_dist = (close / high52 - 1.0) * 100.0 if high52 > 0 else -100.0
+    recovery52 = (close / low52 - 1.0) * 100.0 if low52 > 0 else 0.0
+
+    base = d.iloc[-H_BASE_WEEKS:]
+    base_hi = float(base["High"].max())
+    base_lo = float(base["Low"].min())
+    base_range = (base_hi / base_lo - 1.0) * 100.0 if base_lo > 0 else 999.0
+
+    low26 = d.iloc[-26:]["Low"]
+    low_pos = int(np.argmin(low26.values))
+    weeks_from_low = len(low26) - 1 - low_pos
+
+    prior13 = d.iloc[-(H_HIGH_LOOKBACK + 1):-1]
+    prior13_high = float(prior13["High"].max()) if not prior13.empty else high52
+    dist13_high = (close / prior13_high - 1.0) * 100.0 if prior13_high > 0 else -100.0
+
+    ret13 = (close / float(d["Close"].iloc[-14]) - 1.0) * 100.0 if len(d) >= 14 else 0.0
+    vol_ratio = vol / vol10 if not np.isnan(vol10) and vol10 > 0 else 0.0
+
+    # ① トレンド・MA改善 30点
+    trend = 0.0
+    if close >= ma20: trend += 8
+    elif dist20 >= -4: trend += 4
+    if close >= ma40: trend += 6
+    elif dist40 >= -3: trend += 3
+    if ma5 >= ma20: trend += 4
+    elif ma10 >= ma20: trend += 2
+    if s20 > 1.0: trend += 6
+    elif s20 > 0: trend += 5
+    elif s20 >= -1.0: trend += 2
+    if s40 > 0.5: trend += 6
+    elif s40 >= 0: trend += 5
+    elif s40 >= -0.8: trend += 2
+
+    # ② ベースの質 20点
+    base_score = 0.0
+    if base_range <= 20: base_score += 10
+    elif base_range <= 30: base_score += 8
+    elif base_range <= 40: base_score += 5
+    elif base_range <= 50: base_score += 2
+    if weeks_from_low >= 8: base_score += 5
+    elif weeks_from_low >= 4: base_score += 3
+    if -4 <= dist20 <= 10: base_score += 5
+    elif -6 <= dist20 <= 16: base_score += 3
+
+    # ③ 回復度 20点
+    recovery = 0.0
+    if recovery52 >= 30: recovery += 6
+    elif recovery52 >= 18: recovery += 4
+    elif recovery52 >= 10: recovery += 2
+    if high52_dist >= -8: recovery += 8
+    elif high52_dist >= -18: recovery += 6
+    elif high52_dist >= -30: recovery += 3
+    if ret13 >= 10: recovery += 6
+    elif ret13 >= 3: recovery += 4
+    elif ret13 > 0: recovery += 2
+
+    # ④ 再上昇モメンタム 20点
+    momentum = 0.0
+    if dist13_high >= 0: momentum += 10
+    elif dist13_high >= -3: momentum += 8
+    elif dist13_high >= -8: momentum += 5
+    elif dist13_high >= -12: momentum += 2
+    if 52 <= rsi <= 72: momentum += 6
+    elif 45 <= rsi <= 80: momentum += 4
+    elif 40 <= rsi <= 85: momentum += 2
+    if close > open_: momentum += 2
+    if len(d) >= 2 and close > float(d["Close"].iloc[-2]): momentum += 2
+
+    # ⑤ 週出来高 10点
+    volume_score = 0.0
+    if vol_ratio >= 1.6: volume_score = 10
+    elif vol_ratio >= 1.3: volume_score = 8
+    elif vol_ratio >= 1.0: volume_score = 6
+    elif vol_ratio >= 0.8: volume_score = 3
+
+    score = trend + base_score + recovery + momentum + volume_score
+
+    # 過熱ペナルティ: 初動/再加速でも20週線から離れすぎた週は追いかけない。
+    overheat_penalty = 0.0
+    if dist20 > 18:
+        overheat_penalty += min(12.0, (dist20 - 18.0) * 1.2)
+    if rsi > 80:
+        overheat_penalty += min(6.0, (rsi - 80.0) * 0.8)
+    score = max(0.0, min(100.0, score - overheat_penalty))
+
+    # タイプ判定
+    reaccel = (
+        close >= ma20 and ma20 >= ma40 and s20 > 0 and s40 >= 0
+        and high52_dist >= -12 and dist13_high >= -5
+    )
+    base_turn = (
+        close >= ma40 * 0.98 and s20 > 0 and s40 >= -0.8
+        and base_range <= 40 and dist13_high >= -8
+    )
+    if reaccel:
+        setup_type = "REACCEL"
+    elif base_turn:
+        setup_type = "BASE_TURN"
+    else:
+        setup_type = "EARLY_TURN"
+
+    if score < H_SCORE_MIN:
+        return drop("H_スコア不足")
+
+    ctr["H_合格"] = ctr.get("H_合格", 0) + 1
+    return {
+        "close": round(close, 1),
+        "score": round(score, 1),
+        "setup_type": setup_type,
+        "ma5": round(ma5, 1),
+        "ma20": round(ma20, 1),
+        "ma40": round(ma40, 1),
+        "slope20": round(s20, 2),
+        "slope40": round(s40, 2),
+        "dist20": round(dist20, 2),
+        "dist40": round(dist40, 2),
+        "base_range": round(base_range, 1),
+        "weeks_from_low": int(weeks_from_low),
+        "high52_dist": round(high52_dist, 1),
+        "recovery52": round(recovery52, 1),
+        "dist13_high": round(dist13_high, 1),
+        "ret13": round(ret13, 1),
+        "vol_ratio": round(vol_ratio, 2),
+        "rsi": round(rsi, 1),
+        "overheat_penalty": round(overheat_penalty, 1),
+    }
+
 
 def check_b1(df: pd.DataFrame, ctr: dict) -> dict | None:
     def drop(k): ctr[k] = ctr.get(k, 0) + 1; return None
@@ -1015,7 +1208,7 @@ def enrich_with_fundamentals(df: pd.DataFrame, name_map: dict | None = None,
 # 5. バッチ処理 & スキャン
 # ==========================================
 def process_batch(batch: list, ctr: dict, min_turnover, min_mktcap) -> tuple:
-    ra, rb1, rb2, rc, rd, re_, rf, rg = [], [], [], [], [], [], [], []
+    ra, rh, rb1, rb2, rc, rd, re_, rf, rg = [], [], [], [], [], [], [], [], []
     rm_candidates = []  # 決算モメンタム候補（業績取得前の軽量プレフィルター）
     cache_w, _ = download_batch(batch, "3y", "1wk", "週足")
     cache_d, _ = download_batch(batch, "2y", "1d",  "日足")
@@ -1098,6 +1291,12 @@ def process_batch(batch: list, ctr: dict, min_turnover, min_mktcap) -> tuple:
                         res.update({"ticker":ticker,"code":code,"avg_to":avg_to_oku,"mktcap":mktcap_oku})
                         ra.append(res)
 
+                    # 週足転換H: 画像に近い週足ベース反転/再加速をスコア抽出
+                    res_h = check_h(dfw, ctr)
+                    if res_h:
+                        res_h.update({"ticker":ticker,"code":code,"avg_to":avg_to_oku,"mktcap":mktcap_oku})
+                        rh.append(res_h)
+
             dfd2_calc = None
             dfd2 = dfd.dropna(subset=["Close"])
             if len(dfd2) >= 60:
@@ -1149,7 +1348,7 @@ def process_batch(batch: list, ctr: dict, min_turnover, min_mktcap) -> tuple:
         except Exception:
             pass
 
-    return ra, rb1, rb2, rc, rd, re_, rf, rg, rm_candidates
+    return ra, rh, rb1, rb2, rc, rd, re_, rf, rg, rm_candidates
 
 
 def format_a(rows):
@@ -1163,6 +1362,28 @@ def format_a(rows):
     # 上抜け初動（週数が浅いもの）を優先して上に並べる
     return d.sort_values(["上抜けからの週数", "終値とMA40距離%"],
                          ascending=[True, True]).reset_index(drop=True)
+
+
+def format_h(rows):
+    if not rows: return pd.DataFrame()
+    d = pd.DataFrame(rows)[[
+        "code","ticker","score","setup_type","close","ma5","ma20","ma40",
+        "slope20","slope40","dist20","dist40","base_range","weeks_from_low",
+        "high52_dist","recovery52","dist13_high","ret13","vol_ratio","rsi",
+        "overheat_penalty","avg_to","mktcap"
+    ]]
+    d.columns = [
+        "証券コード","Ticker","週足転換スコア","週足転換タイプ","終値","5週MA","20週MA","40週MA",
+        "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA乖離%","40週MA乖離%",
+        "16週ベース幅%","26週安値から週数","52週高値距離%","52週安値回復率%",
+        "13週高値距離%","13週騰落率%","週出来高倍率","週RSI",
+        "過熱ペナルティ","売買代金(億円)","時価総額(億円)"
+    ]
+    type_order = {"REACCEL":0, "BASE_TURN":1, "EARLY_TURN":2}
+    d["_type_order"] = d["週足転換タイプ"].map(type_order).fillna(9)
+    d = d.sort_values(["週足転換スコア","_type_order","週出来高倍率"],
+                      ascending=[False, True, False]).drop(columns=["_type_order"])
+    return d.reset_index(drop=True)
 
 def format_b1(rows):
     if not rows: return pd.DataFrame()
@@ -1209,7 +1430,7 @@ def format_g(rows):
     # 下落日出来高に対する当日出来高の比が高い順（買いの勢いが強い順）
     return d.sort_values("出来高/下落日比", ascending=False).reset_index(drop=True)
 
-def build_multi_hit(dfa, dfb1, dfb2, dfc, dfd, dfe, dff, dfg):
+def build_multi_hit(dfa, dfh, dfb1, dfb2, dfc, dfd, dfe, dff, dfg):
     hits = {}
     def register(df, pattern):
         if df.empty: return
@@ -1225,6 +1446,7 @@ def build_multi_hit(dfa, dfb1, dfb2, dfc, dfd, dfe, dff, dfg):
             hits[t]["パターン"].add(pattern)
             hits[t]["終値"] = row["終値"]
     register(dfa,  "週A")
+    register(dfh,  "週H")
     register(dfb1, "日B1")
     register(dfb2, "日B2")
     register(dfc,  "ボリバンC")
@@ -1333,8 +1555,8 @@ def load_history(gc: gspread.Client, spreadsheet_id: str) -> pd.DataFrame:
 
 def append_today_to_history(gc: gspread.Client, spreadsheet_id: str,
                             today_str: str,
-                            dfa: pd.DataFrame, dfb1: pd.DataFrame,
-                            dfb2: pd.DataFrame, dfc: pd.DataFrame,
+                            dfa: pd.DataFrame, dfh: pd.DataFrame,
+                            dfb1: pd.DataFrame, dfb2: pd.DataFrame, dfc: pd.DataFrame,
                             dfd: pd.DataFrame = None,
                             dfe: pd.DataFrame = None,
                             dff: pd.DataFrame = None,
@@ -1353,6 +1575,7 @@ def append_today_to_history(gc: gspread.Client, spreadsheet_id: str,
             new_rows.append({"日付": today_str, "Ticker": t, "パターン": pattern_label})
 
     collect(dfa,  "週A")
+    collect(dfh,  "週H")
     collect(dfb1, "日B1")
     collect(dfb2, "日B2")
     collect(dfc,  "ボリバンC")
@@ -1525,7 +1748,7 @@ def main():
     total = len(batches)
     print(f"バッチ数: {total}", flush=True)
 
-    all_a, all_b1, all_b2, all_c, all_d, all_e, all_f, all_g = [], [], [], [], [], [], [], []
+    all_a, all_h, all_b1, all_b2, all_c, all_d, all_e, all_f, all_g = [], [], [], [], [], [], [], [], []
     all_m_candidates = []
     ctr = {}
     t0 = time.time()
@@ -1536,8 +1759,8 @@ def main():
         completed = 0
         for future in as_completed(futures):
             try:
-                ra, rb1, rb2, rc, rd, re_, rf, rg, rm_candidates = future.result()
-                all_a.extend(ra); all_b1.extend(rb1); all_b2.extend(rb2)
+                ra, rh, rb1, rb2, rc, rd, re_, rf, rg, rm_candidates = future.result()
+                all_a.extend(ra); all_h.extend(rh); all_b1.extend(rb1); all_b2.extend(rb2)
                 all_c.extend(rc); all_d.extend(rd); all_e.extend(re_)
                 all_f.extend(rf); all_g.extend(rg)
                 all_m_candidates.extend(rm_candidates)
@@ -1551,7 +1774,7 @@ def main():
 
     elapsed = time.time() - t0
     print(f"=== スキャン完了 ({elapsed/60:.1f}分) ===", flush=True)
-    print(f"週足A: {len(all_a)}件 / 日足B1: {len(all_b1)}件 / 日足B2: {len(all_b2)}件 / "
+    print(f"週足A: {len(all_a)}件 / 週足転換H: {len(all_h)}件 / 日足B1: {len(all_b1)}件 / 日足B2: {len(all_b2)}件 / "
           f"ボリバンC: {len(all_c)}件 / 初押しD: {len(all_d)}件 / 出来高E: {len(all_e)}件 / "
           f"GC底打ちF: {len(all_f)}件 / ポケピG: {len(all_g)}件", flush=True)
 
@@ -1563,6 +1786,7 @@ def main():
         # パターンごとにプレフィックスでグループ分けして表示
         groups = {
             "A_": "【週足パターンA】",
+            "H_": "【週足転換H 画像マッチ】",
             "B1_": "【日足B1 押し目待ち】",
             "B2_": "【日足B2 反発エントリー】",
             "C_": "【ボリバンC ブレイク】",
@@ -1593,6 +1817,7 @@ def main():
         print("─" * 60 + "\n", flush=True)
 
     dfa  = format_a(all_a)
+    dfh  = format_h(all_h)
     dfb1 = format_b1(all_b1)
     dfb2 = format_b2(all_b2)
     dfc  = format_c(all_c)
@@ -1603,6 +1828,7 @@ def main():
 
     print("ファンダメンタルズ取得中...", flush=True)
     dfa  = enrich_with_fundamentals(dfa,  name_map)
+    dfh  = enrich_with_fundamentals(dfh,  name_map)
     dfb1 = enrich_with_fundamentals(dfb1, name_map)
     dfb2 = enrich_with_fundamentals(dfb2, name_map)
     dfc  = enrich_with_fundamentals(dfc,  name_map)
@@ -1611,7 +1837,7 @@ def main():
     dff  = enrich_with_fundamentals(dff,  name_map)
     dfg  = enrich_with_fundamentals(dfg,  name_map)
 
-    dfm = build_multi_hit(dfa, dfb1, dfb2, dfc, dfd, dfe, dff, dfg)
+    dfm = build_multi_hit(dfa, dfh, dfb1, dfb2, dfc, dfd, dfe, dff, dfg)
 
     # ── 決算モメンタム分析 ───────────────────────────────
     # 軽量プレフィルター上位のみを yfinance の四半期決算データへ回す。
@@ -1648,11 +1874,12 @@ def main():
 
     # ── 履歴に今回のヒットを追記し、1年より古い記録を削除 ──
     print("抽出履歴を更新中...", flush=True)
-    history = append_today_to_history(gc, spreadsheet_id, today_str, dfa, dfb1, dfb2, dfc, dfd, dfe, dff, dfg)
+    history = append_today_to_history(gc, spreadsheet_id, today_str, dfa, dfh, dfb1, dfb2, dfc, dfd, dfe, dff, dfg)
     stats = compute_history_stats(history, today_str)
 
     # ── 各結果に「前回抽出日」「年間抽出回数」を付与 ──
     dfa  = attach_history_stats(dfa,  stats)
+    dfh  = attach_history_stats(dfh,  stats)
     dfb1 = attach_history_stats(dfb1, stats)
     dfb2 = attach_history_stats(dfb2, stats)
     dfc  = attach_history_stats(dfc,  stats)
@@ -1667,6 +1894,7 @@ def main():
     write_df_to_sheet(gc, spreadsheet_id, "複数パターン合致", dfm)
     write_df_to_sheet(gc, spreadsheet_id, "決算モメンタム", df_momentum)
     write_df_to_sheet(gc, spreadsheet_id, "週足パターンA",     dfa)
+    write_df_to_sheet(gc, spreadsheet_id, "週足転換H",          dfh)
     write_df_to_sheet(gc, spreadsheet_id, "日足B1押し目待ち",   dfb1)
     write_df_to_sheet(gc, spreadsheet_id, "日足B2反発エントリー", dfb2)
     write_df_to_sheet(gc, spreadsheet_id, "ボリバンCブレイク",   dfc)
@@ -1683,6 +1911,7 @@ def main():
         "トリガー種別": os.environ.get("GITHUB_EVENT_NAME", "不明（ローカル実行など）"),
         "対象銘柄数": len(tickers_all),
         "週足A件数": len(dfa),
+        "週足転換H件数": len(dfh),
         "日足B1件数": len(dfb1),
         "日足B2件数": len(dfb2),
         "ボリバンC件数": len(dfc),
