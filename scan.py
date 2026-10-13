@@ -67,8 +67,10 @@ A_RSI_MAX        = 85.0  # RSI上限は安全弁のみ。上抜け初動はRSI�
 
 # ── 週足転換H: 画像に近い「ベース反転 / 再加速 / 初動」をスコア化 ──
 # A/Fを置き換えず、TURNAROUND内の追加確認シグナルとして使う。
-H_SCORE_MIN       = 68.0   # 研究候補として保存する下限
-H_CORE_SCORE_MIN  = 80.0   # TURNAROUND本体へ昇格する下限
+H_SCORE_MIN          = 60.0   # EARLY_TURNを早めに研究候補へ入れる
+H_EARLY_CORE_MIN     = 70.0   # 初動は早めに本命へ昇格
+H_BASE_CORE_MIN      = 80.0   # ベース反転は従来水準
+H_REACCEL_CORE_MIN   = 85.0   # 再加速はかなり厳選
 H_BASE_WEEKS      = 16     # 週足ベースの幅を測る期間
 H_HIGH_LOOKBACK   = 13     # 直近高値への接近/突破判定
 H_MAX_DIST20      = 30.0   # 20週MAから30%以上上方乖離は過熱として除外
@@ -535,68 +537,251 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     dist13_high = (close / prior13_high - 1.0) * 100.0 if prior13_high > 0 else -100.0
 
     ret13 = (close / float(d["Close"].iloc[-14]) - 1.0) * 100.0 if len(d) >= 14 else 0.0
-    vol_ratio = vol / vol10 if not np.isnan(vol10) and vol10 > 0 else 0.0
 
-    # ① トレンド・MA改善 30点
-    trend = 0.0
-    if close >= ma20: trend += 8
-    elif dist20 >= -4: trend += 4
-    if close >= ma40: trend += 6
-    elif dist40 >= -3: trend += 3
-    if ma5 >= ma20: trend += 4
-    elif ma10 >= ma20: trend += 2
-    if s20 > 1.0: trend += 6
-    elif s20 > 0: trend += 5
-    elif s20 >= -1.0: trend += 2
-    if s40 > 0.5: trend += 6
-    elif s40 >= 0: trend += 5
-    elif s40 >= -0.8: trend += 2
+    # 週途中の未完成出来高を完成週平均と比較しない。
+    # 前週の完成出来高 ÷ その前10週平均を使う。
+    completed_vol_ratio = 0.0
+    if len(d) >= 12:
+        prev_vol = float(d["Volume"].iloc[-2])
+        prev10 = pd.to_numeric(d["Volume"].iloc[-12:-2], errors="coerce").dropna()
+        if len(prev10) >= 5 and float(prev10.mean()) > 0:
+            completed_vol_ratio = prev_vol / float(prev10.mean())
 
-    # ② ベースの質 20点
-    base_score = 0.0
-    if base_range <= 20: base_score += 10
-    elif base_range <= 30: base_score += 8
-    elif base_range <= 40: base_score += 5
-    elif base_range <= 50: base_score += 2
-    if weeks_from_low >= 8: base_score += 5
-    elif weeks_from_low >= 4: base_score += 3
-    if -4 <= dist20 <= 10: base_score += 5
-    elif -6 <= dist20 <= 16: base_score += 3
+    def _weeks_since_reclaim(ma_col: str, lookback: int = 16) -> int:
+        """現在そのMA上なら、最後に終値がMA以下だった週からの経過週数。"""
+        try:
+            cur_ma = float(d[ma_col].iloc[-1])
+            if close < cur_ma:
+                return 999
+            recent = d.iloc[-(lookback + 1):]
+            below = recent[recent["Close"] <= recent[ma_col]]
+            if below.empty:
+                return 999
+            return max(0, int(round((d.index[-1] - below.index[-1]).days / 7)))
+        except Exception:
+            return 999
 
-    # ③ 回復度 20点
-    recovery = 0.0
-    if recovery52 >= 30: recovery += 6
-    elif recovery52 >= 18: recovery += 4
-    elif recovery52 >= 10: recovery += 2
-    if high52_dist >= -8: recovery += 8
-    elif high52_dist >= -18: recovery += 6
-    elif high52_dist >= -30: recovery += 3
-    if ret13 >= 10: recovery += 6
-    elif ret13 >= 3: recovery += 4
-    elif ret13 > 0: recovery += 2
+    def _weeks_since_signal(flag: pd.Series, lookback: int = 16) -> int:
+        try:
+            recent = flag.iloc[-lookback:].fillna(False).astype(bool)
+            hits = recent[recent]
+            if hits.empty:
+                return 999
+            return max(0, int(round((d.index[-1] - hits.index[-1]).days / 7)))
+        except Exception:
+            return 999
 
-    # ④ 再上昇モメンタム 20点
-    momentum = 0.0
-    if dist13_high >= 0: momentum += 10
-    elif dist13_high >= -3: momentum += 8
-    elif dist13_high >= -8: momentum += 5
-    elif dist13_high >= -12: momentum += 2
-    if 52 <= rsi <= 72: momentum += 6
-    elif 45 <= rsi <= 80: momentum += 4
-    elif 40 <= rsi <= 85: momentum += 2
-    if close > open_: momentum += 2
-    if len(d) >= 2 and close > float(d["Close"].iloc[-2]): momentum += 2
+    weeks20_reclaim = _weeks_since_reclaim("WMA20", 16)
+    weeks40_reclaim = _weeks_since_reclaim("MA40", 20)
 
-    # ⑤ 週出来高 10点
-    volume_score = 0.0
-    if vol_ratio >= 1.6: volume_score = 10
-    elif vol_ratio >= 1.3: volume_score = 8
-    elif vol_ratio >= 1.0: volume_score = 6
-    elif vol_ratio >= 0.8: volume_score = 3
+    s20_prev = float(d["WMA20_s4"].iloc[-5]) if len(d) >= 5 else s20
+    s40_prev = float(d["MA40_s4b"].iloc[-5]) if len(d) >= 5 else s40
+    s20_improve = s20 - s20_prev
+    s40_improve = s40 - s40_prev
 
-    score = trend + base_score + recovery + momentum + volume_score
+    slope20_turn = (d["WMA20_s4"] > 0) & (d["WMA20_s4"].shift(1) <= 0)
+    slope40_turn = (d["MA40_s4b"] >= 0) & (d["MA40_s4b"].shift(1) < 0)
+    weeks20_slope_turn = _weeks_since_signal(slope20_turn, 16)
+    weeks40_slope_turn = _weeks_since_signal(slope40_turn, 20)
 
-    # 過熱ペナルティ: 初動/再加速でも20週線から離れすぎた週は追いかけない。
+    prev13_series = d["High"].shift(1).rolling(H_HIGH_LOOKBACK).max()
+    breakout13 = (d["Close"] >= prev13_series) & (d["Close"].shift(1) < prev13_series.shift(1))
+    weeks13_break = _weeks_since_signal(breakout13, 16)
+
+    # ─────────────────────────────────────────
+    # EARLY_TURN score（最重要）
+    # 「まだ伸び切っていない」「MA近辺」「傾き改善」「高値まで余地」を厚く評価。
+    # ─────────────────────────────────────────
+    early_score = 0.0
+
+    # 価格位置 30点
+    if -2 <= dist20 <= 8: early_score += 14
+    elif -5 <= dist20 <= 12: early_score += 10
+    elif -8 <= dist20 <= 16: early_score += 5
+
+    if -3 <= dist40 <= 12: early_score += 10
+    elif -8 <= dist40 <= 18: early_score += 6
+    elif -12 <= dist40 <= 22: early_score += 3
+
+    if ma5 >= ma10: early_score += 3
+    if ma10 >= ma20 * 0.98: early_score += 3
+
+    # MAの「向きが良くなっている」こと 25点
+    if s20 > 0.5: early_score += 8
+    elif s20 >= -0.3: early_score += 6
+    elif s20 >= -1.0: early_score += 3
+
+    if s20_improve >= 1.0: early_score += 6
+    elif s20_improve >= 0.3: early_score += 4
+    elif s20_improve > 0: early_score += 2
+
+    if s40 >= 0: early_score += 5
+    elif s40 >= -0.8: early_score += 4
+    elif s40 >= -1.5: early_score += 2
+
+    if s40_improve >= 0.6: early_score += 6
+    elif s40_improve > 0: early_score += 3
+
+    # 初動の新鮮さ 20点
+    if weeks20_reclaim <= 3: early_score += 8
+    elif weeks20_reclaim <= 6: early_score += 6
+    elif weeks20_reclaim <= 9: early_score += 3
+
+    if weeks40_reclaim <= 5: early_score += 5
+    elif weeks40_reclaim <= 10: early_score += 3
+
+    if 3 <= weeks_from_low <= 14: early_score += 7
+    elif 2 <= weeks_from_low <= 20: early_score += 4
+    elif weeks_from_low <= 24: early_score += 2
+
+    # 上値余地 15点
+    # 高値更新済みより「高値までまだ5〜35%ほど余地」がある銘柄をEARLYでは優遇。
+    if -35 <= high52_dist <= -8: early_score += 8
+    elif -45 <= high52_dist < -35: early_score += 5
+    elif -8 < high52_dist <= -4: early_score += 4
+    elif -4 < high52_dist <= 0: early_score += 1
+
+    if -10 <= dist13_high <= 2: early_score += 4
+    elif -18 <= dist13_high < -10: early_score += 2
+
+    if base_range <= 35: early_score += 3
+    elif base_range <= 45: early_score += 2
+
+    # 確認 10点
+    if 45 <= rsi <= 68: early_score += 4
+    elif 40 <= rsi <= 72: early_score += 2
+
+    if 2 <= ret13 <= 16: early_score += 3
+    elif 0 < ret13 < 2: early_score += 2
+
+    if completed_vol_ratio >= 1.2: early_score += 3
+    elif completed_vol_ratio >= 0.8: early_score += 2
+    elif completed_vol_ratio >= 0.6: early_score += 1
+
+    early_score = min(100.0, early_score)
+
+    early_eligible = (
+        2 <= weeks_from_low <= 24
+        and -8.0 <= dist20 <= 16.0
+        and -12.0 <= dist40 <= 22.0
+        and -50.0 <= high52_dist <= -3.0
+        and s20 >= -1.0
+        and s40 >= -1.8
+        and (
+            weeks20_reclaim <= 9
+            or weeks40_reclaim <= 12
+            or weeks20_slope_turn <= 6
+            or s20_improve >= 0.6
+        )
+    )
+
+    # ─────────────────────────────────────────
+    # BASE_TURN score
+    # ─────────────────────────────────────────
+    base_turn_score = 0.0
+    if base_range <= 20: base_turn_score += 20
+    elif base_range <= 30: base_turn_score += 16
+    elif base_range <= 40: base_turn_score += 10
+    elif base_range <= 45: base_turn_score += 5
+
+    if -3 <= dist20 <= 8: base_turn_score += 15
+    elif -6 <= dist20 <= 13: base_turn_score += 9
+
+    if s20 > 0.5: base_turn_score += 12
+    elif s20 > 0: base_turn_score += 9
+    elif s20 >= -0.5: base_turn_score += 4
+
+    if s40 >= 0: base_turn_score += 10
+    elif s40 >= -0.8: base_turn_score += 6
+
+    if dist13_high >= -3: base_turn_score += 15
+    elif dist13_high >= -8: base_turn_score += 10
+    elif dist13_high >= -12: base_turn_score += 5
+
+    if -25 <= high52_dist <= -3: base_turn_score += 10
+    elif -35 <= high52_dist < -25: base_turn_score += 5
+
+    if 8 <= weeks_from_low <= 24: base_turn_score += 8
+    elif weeks_from_low >= 5: base_turn_score += 4
+
+    if 48 <= rsi <= 70: base_turn_score += 5
+    elif 42 <= rsi <= 76: base_turn_score += 3
+
+    if completed_vol_ratio >= 1.0: base_turn_score += 5
+    elif completed_vol_ratio >= 0.7: base_turn_score += 3
+
+    base_turn_score = min(100.0, base_turn_score)
+    base_eligible = (
+        base_range <= 45
+        and -6 <= dist20 <= 13
+        and s20 >= -0.5
+        and s40 >= -1.0
+        and dist13_high >= -12
+        and weeks_from_low >= 5
+    )
+
+    # ─────────────────────────────────────────
+    # REACCEL score（本命は厳選）
+    # ─────────────────────────────────────────
+    reaccel_score = 0.0
+    if high52_dist >= -5: reaccel_score += 20
+    elif high52_dist >= -10: reaccel_score += 15
+    elif high52_dist >= -15: reaccel_score += 8
+
+    if dist13_high >= 0: reaccel_score += 20
+    elif dist13_high >= -3: reaccel_score += 15
+    elif dist13_high >= -6: reaccel_score += 8
+
+    if ma20 >= ma40 and s20 > 0 and s40 >= 0: reaccel_score += 20
+    elif s20 > 0 and s40 >= -0.5: reaccel_score += 12
+
+    if 0 <= dist20 <= 10: reaccel_score += 10
+    elif -2 <= dist20 <= 15: reaccel_score += 6
+
+    if 0 <= dist40 <= 25: reaccel_score += 10
+    elif -3 <= dist40 <= 32: reaccel_score += 5
+
+    if 3 <= ret13 <= 20: reaccel_score += 10
+    elif ret13 > 0: reaccel_score += 5
+
+    if 52 <= rsi <= 75: reaccel_score += 5
+    elif 45 <= rsi <= 80: reaccel_score += 3
+
+    if completed_vol_ratio >= 1.2: reaccel_score += 5
+    elif completed_vol_ratio >= 0.8: reaccel_score += 3
+
+    reaccel_score = min(100.0, reaccel_score)
+    reaccel_eligible = (
+        close >= ma20
+        and ma20 >= ma40
+        and s20 > 0
+        and s40 >= -0.5
+        and high52_dist >= -15
+        and dist13_high >= -8
+    )
+
+    # EARLY_TURNを最優先で分類。
+    # 条件を満たす初動をREACCELへ吸わせない。
+    if early_eligible and early_score >= H_SCORE_MIN:
+        setup_type = "EARLY_TURN"
+        score = early_score
+    elif base_eligible and base_turn_score >= H_SCORE_MIN:
+        setup_type = "BASE_TURN"
+        score = base_turn_score
+    elif reaccel_eligible and reaccel_score >= H_SCORE_MIN:
+        setup_type = "REACCEL"
+        score = reaccel_score
+    else:
+        # 研究候補として最も近い形を残す
+        candidates = {
+            "EARLY_TURN": early_score,
+            "BASE_TURN": base_turn_score,
+            "REACCEL": reaccel_score,
+        }
+        setup_type = max(candidates, key=candidates.get)
+        score = candidates[setup_type]
+
+    # 過熱ペナルティ。EARLYはMA近辺が前提なので通常ほぼ0。
     overheat_penalty = 0.0
     if dist20 > 18:
         overheat_penalty += min(12.0, (dist20 - 18.0) * 1.2)
@@ -604,38 +789,60 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         overheat_penalty += min(6.0, (rsi - 80.0) * 0.8)
     score = max(0.0, min(100.0, score - overheat_penalty))
 
-    # タイプ判定
-    reaccel = (
-        close >= ma20 and ma20 >= ma40 and s20 > 0 and s40 >= 0
-        and high52_dist >= -12 and dist13_high >= -5
-    )
-    base_turn = (
-        close >= ma40 * 0.98 and s20 > 0 and s40 >= -0.8
-        and base_range <= 40 and dist13_high >= -8
-    )
-    if reaccel:
-        setup_type = "REACCEL"
-    elif base_turn:
-        setup_type = "BASE_TURN"
-    else:
-        setup_type = "EARLY_TURN"
-
     if score < H_SCORE_MIN:
         return drop("H_スコア不足")
 
-    # TURNAROUND本体へ入れる「本命」はさらに厳しくする。
-    # 68〜79点は研究候補として週足転換Hシートには残すが、TURNAROUND件数には含めない。
-    core_ok = (
-        score >= H_CORE_SCORE_MIN
-        and -4.0 <= dist20 <= 15.0
-        and s20 > 0.0
-        and s40 >= -0.5
-        and dist13_high >= -5.0
-        and high52_dist >= -25.0
-        and weeks_from_low >= 6
-        and base_range <= 45.0
-        and overheat_penalty <= 8.0
+    # タイプ別の本命昇格。
+    early_core = (
+        setup_type == "EARLY_TURN"
+        and score >= H_EARLY_CORE_MIN
+        and -4.0 <= dist20 <= 10.0
+        and -8.0 <= dist40 <= 18.0
+        and s20 >= -0.3
+        and s20_improve > 0
+        and 3 <= weeks_from_low <= 20
+        and -45.0 <= high52_dist <= -5.0
+        and (
+            weeks20_reclaim <= 6
+            or weeks40_reclaim <= 10
+            or weeks20_slope_turn <= 4
+        )
+        and overheat_penalty <= 3.0
     )
+
+    base_core = (
+        setup_type == "BASE_TURN"
+        and score >= H_BASE_CORE_MIN
+        and -4.0 <= dist20 <= 12.0
+        and s20 > 0
+        and s40 >= -0.8
+        and dist13_high >= -8
+        and base_range <= 40
+        and overheat_penalty <= 6.0
+    )
+
+    # REACCELは「状態」ではなく新しい再加速だけ本命。
+    reaccel_core = (
+        setup_type == "REACCEL"
+        and score >= H_REACCEL_CORE_MIN
+        and -2.0 <= dist20 <= 12.0
+        and s20 > 0
+        and s40 >= 0
+        and high52_dist >= -12
+        and (
+            weeks13_break <= 3
+            or weeks20_reclaim <= 4
+        )
+        and overheat_penalty <= 6.0
+    )
+
+    core_ok = early_core or base_core or reaccel_core
+    if setup_type == "EARLY_TURN":
+        signal_stage = "🌱初動本命" if early_core else "👀先回り監視"
+    elif setup_type == "BASE_TURN":
+        signal_stage = "🧱ベース本命" if base_core else "🧱ベース監視"
+    else:
+        signal_stage = "🚀再加速本命" if reaccel_core else "➡️再加速継続"
 
     ctr["H_合格"] = ctr.get("H_合格", 0) + 1
     if core_ok:
@@ -646,7 +853,11 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     return {
         "close": round(close, 1),
         "score": round(score, 1),
+        "early_score": round(early_score, 1),
+        "base_score": round(base_turn_score, 1),
+        "reaccel_score": round(reaccel_score, 1),
         "core_flag": "本命" if core_ok else "研究候補",
+        "signal_stage": signal_stage,
         "setup_type": setup_type,
         "ma5": round(ma5, 1),
         "ma20": round(ma20, 1),
@@ -661,7 +872,14 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         "recovery52": round(recovery52, 1),
         "dist13_high": round(dist13_high, 1),
         "ret13": round(ret13, 1),
-        "vol_ratio": round(vol_ratio, 2),
+        "vol_ratio": round(completed_vol_ratio, 2),
+        "weeks20_reclaim": int(weeks20_reclaim),
+        "weeks40_reclaim": int(weeks40_reclaim),
+        "weeks20_slope_turn": int(weeks20_slope_turn),
+        "weeks40_slope_turn": int(weeks40_slope_turn),
+        "weeks13_break": int(weeks13_break),
+        "s20_improve": round(s20_improve, 2),
+        "s40_improve": round(s40_improve, 2),
         "rsi": round(rsi, 1),
         "overheat_penalty": round(overheat_penalty, 1),
     }
@@ -1388,22 +1606,27 @@ def format_a(rows):
 def format_h(rows):
     if not rows: return pd.DataFrame()
     d = pd.DataFrame(rows)[[
-        "code","ticker","score","core_flag","setup_type","close","ma5","ma20","ma40",
-        "slope20","slope40","dist20","dist40","base_range","weeks_from_low",
-        "high52_dist","recovery52","dist13_high","ret13","vol_ratio","rsi",
+        "code","ticker","score","early_score","base_score","reaccel_score","core_flag","signal_stage","setup_type",
+        "close","ma5","ma20","ma40","slope20","slope40","s20_improve","s40_improve",
+        "dist20","dist40","base_range","weeks_from_low","weeks20_reclaim","weeks40_reclaim",
+        "weeks20_slope_turn","weeks40_slope_turn","high52_dist","recovery52",
+        "dist13_high","weeks13_break","ret13","vol_ratio","rsi",
         "overheat_penalty","avg_to","mktcap"
     ]]
     d.columns = [
-        "証券コード","Ticker","週足転換スコア","本命判定","週足転換タイプ","終値","5週MA","20週MA","40週MA",
-        "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA乖離%","40週MA乖離%",
-        "16週ベース幅%","26週安値から週数","52週高値距離%","52週安値回復率%",
-        "13週高値距離%","13週騰落率%","週出来高倍率","週RSI",
+        "証券コード","Ticker","週足転換スコア","EARLYスコア","BASEスコア","REACCELスコア",
+        "本命判定","初動ステージ","週足転換タイプ","終値","5週MA","20週MA","40週MA",
+        "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA傾き改善","40週MA傾き改善",
+        "20週MA乖離%","40週MA乖離%","16週ベース幅%","26週安値から週数",
+        "20週MA再奪回から週数","40週MA再奪回から週数","20週MA上向き転換から週数","40週MA上向き転換から週数",
+        "52週高値距離%","52週安値回復率%","13週高値距離%","13週高値ブレイクから週数",
+        "13週騰落率%","完成週出来高倍率","週RSI",
         "過熱ペナルティ","売買代金(億円)","時価総額(億円)"
     ]
-    type_order = {"REACCEL":0, "BASE_TURN":1, "EARLY_TURN":2}
+    type_order = {"EARLY_TURN":0, "BASE_TURN":1, "REACCEL":2}
     d["_type_order"] = d["週足転換タイプ"].map(type_order).fillna(9)
-    d = d.sort_values(["週足転換スコア","_type_order","週出来高倍率"],
-                      ascending=[False, True, False]).drop(columns=["_type_order"])
+    d = d.sort_values(["_type_order","本命判定","週足転換スコア","完成週出来高倍率"],
+                      ascending=[True, True, False, False]).drop(columns=["_type_order"])
     return d.reset_index(drop=True)
 
 def format_b1(rows):
