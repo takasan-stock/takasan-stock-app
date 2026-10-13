@@ -67,7 +67,8 @@ A_RSI_MAX        = 85.0  # RSI上限は安全弁のみ。上抜け初動はRSI�
 
 # ── 週足転換H: 画像に近い「ベース反転 / 再加速 / 初動」をスコア化 ──
 # A/Fを置き換えず、TURNAROUND内の追加確認シグナルとして使う。
-H_SCORE_MIN       = 68.0   # 抽出下限。70前後から「形が整った」候補
+H_SCORE_MIN       = 68.0   # 研究候補として保存する下限
+H_CORE_SCORE_MIN  = 80.0   # TURNAROUND本体へ昇格する下限
 H_BASE_WEEKS      = 16     # 週足ベースの幅を測る期間
 H_HIGH_LOOKBACK   = 13     # 直近高値への接近/突破判定
 H_MAX_DIST20      = 30.0   # 20週MAから30%以上上方乖離は過熱として除外
@@ -622,10 +623,30 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     if score < H_SCORE_MIN:
         return drop("H_スコア不足")
 
+    # TURNAROUND本体へ入れる「本命」はさらに厳しくする。
+    # 68〜79点は研究候補として週足転換Hシートには残すが、TURNAROUND件数には含めない。
+    core_ok = (
+        score >= H_CORE_SCORE_MIN
+        and -4.0 <= dist20 <= 15.0
+        and s20 > 0.0
+        and s40 >= -0.5
+        and dist13_high >= -5.0
+        and high52_dist >= -25.0
+        and weeks_from_low >= 6
+        and base_range <= 45.0
+        and overheat_penalty <= 8.0
+    )
+
     ctr["H_合格"] = ctr.get("H_合格", 0) + 1
+    if core_ok:
+        ctr["H_本命"] = ctr.get("H_本命", 0) + 1
+    else:
+        ctr["H_研究候補"] = ctr.get("H_研究候補", 0) + 1
+
     return {
         "close": round(close, 1),
         "score": round(score, 1),
+        "core_flag": "本命" if core_ok else "研究候補",
         "setup_type": setup_type,
         "ma5": round(ma5, 1),
         "ma20": round(ma20, 1),
@@ -1367,13 +1388,13 @@ def format_a(rows):
 def format_h(rows):
     if not rows: return pd.DataFrame()
     d = pd.DataFrame(rows)[[
-        "code","ticker","score","setup_type","close","ma5","ma20","ma40",
+        "code","ticker","score","core_flag","setup_type","close","ma5","ma20","ma40",
         "slope20","slope40","dist20","dist40","base_range","weeks_from_low",
         "high52_dist","recovery52","dist13_high","ret13","vol_ratio","rsi",
         "overheat_penalty","avg_to","mktcap"
     ]]
     d.columns = [
-        "証券コード","Ticker","週足転換スコア","週足転換タイプ","終値","5週MA","20週MA","40週MA",
+        "証券コード","Ticker","週足転換スコア","本命判定","週足転換タイプ","終値","5週MA","20週MA","40週MA",
         "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA乖離%","40週MA乖離%",
         "16週ベース幅%","26週安値から週数","52週高値距離%","52週安値回復率%",
         "13週高値距離%","13週騰落率%","週出来高倍率","週RSI",
@@ -1829,6 +1850,7 @@ def main():
     print("ファンダメンタルズ取得中...", flush=True)
     dfa  = enrich_with_fundamentals(dfa,  name_map)
     dfh  = enrich_with_fundamentals(dfh,  name_map)
+    dfh_core = dfh[dfh["本命判定"].astype(str) == "本命"].copy() if (not dfh.empty and "本命判定" in dfh.columns) else pd.DataFrame()
     dfb1 = enrich_with_fundamentals(dfb1, name_map)
     dfb2 = enrich_with_fundamentals(dfb2, name_map)
     dfc  = enrich_with_fundamentals(dfc,  name_map)
@@ -1837,7 +1859,7 @@ def main():
     dff  = enrich_with_fundamentals(dff,  name_map)
     dfg  = enrich_with_fundamentals(dfg,  name_map)
 
-    dfm = build_multi_hit(dfa, dfh, dfb1, dfb2, dfc, dfd, dfe, dff, dfg)
+    dfm = build_multi_hit(dfa, dfh_core, dfb1, dfb2, dfc, dfd, dfe, dff, dfg)
 
     # ── 決算モメンタム分析 ───────────────────────────────
     # 軽量プレフィルター上位のみを yfinance の四半期決算データへ回す。
@@ -1874,12 +1896,13 @@ def main():
 
     # ── 履歴に今回のヒットを追記し、1年より古い記録を削除 ──
     print("抽出履歴を更新中...", flush=True)
-    history = append_today_to_history(gc, spreadsheet_id, today_str, dfa, dfh, dfb1, dfb2, dfc, dfd, dfe, dff, dfg)
+    history = append_today_to_history(gc, spreadsheet_id, today_str, dfa, dfh_core, dfb1, dfb2, dfc, dfd, dfe, dff, dfg)
     stats = compute_history_stats(history, today_str)
 
     # ── 各結果に「前回抽出日」「年間抽出回数」を付与 ──
     dfa  = attach_history_stats(dfa,  stats)
     dfh  = attach_history_stats(dfh,  stats)
+    dfh_core = attach_history_stats(dfh_core, stats)
     dfb1 = attach_history_stats(dfb1, stats)
     dfb2 = attach_history_stats(dfb2, stats)
     dfc  = attach_history_stats(dfc,  stats)
@@ -1895,6 +1918,7 @@ def main():
     write_df_to_sheet(gc, spreadsheet_id, "決算モメンタム", df_momentum)
     write_df_to_sheet(gc, spreadsheet_id, "週足パターンA",     dfa)
     write_df_to_sheet(gc, spreadsheet_id, "週足転換H",          dfh)
+    write_df_to_sheet(gc, spreadsheet_id, "週足転換H本命",      dfh_core)
     write_df_to_sheet(gc, spreadsheet_id, "日足B1押し目待ち",   dfb1)
     write_df_to_sheet(gc, spreadsheet_id, "日足B2反発エントリー", dfb2)
     write_df_to_sheet(gc, spreadsheet_id, "ボリバンCブレイク",   dfc)
@@ -1912,6 +1936,7 @@ def main():
         "対象銘柄数": len(tickers_all),
         "週足A件数": len(dfa),
         "週足転換H件数": len(dfh),
+        "週足転換H本命件数": len(dfh_core),
         "日足B1件数": len(dfb1),
         "日足B2件数": len(dfb2),
         "ボリバンC件数": len(dfc),

@@ -262,16 +262,20 @@ elif section=="🔄 底打ち転換":
             "週出来高倍率","週RSI","過熱ペナルティ"
         ])
         st.markdown("#### 🖼️ 週足転換H｜参考チャート類似候補")
-        st.caption("EARLY_TURN=底打ち初動 / BASE_TURN=ベース反転 / REACCEL=再加速。70点前後から形が整った候補です。")
+        st.caption("68点以上は研究候補として保存。80点以上＋形状条件を満たす銘柄だけをTURNAROUND本命へ昇格します。")
         h1,h2,h3=st.columns([1.0,1.0,1.2])
         with h1:
-            h_min=st.slider("最低週足転換スコア",0,100,68,1,key="h_min_score")
+            h_min=st.slider("最低週足転換スコア",0,100,80,1,key="h_min_score")
         with h2:
             h_type=st.selectbox("週足転換タイプ",["すべて","EARLY_TURN","BASE_TURN","REACCEL"],key="h_type")
         with h3:
             h_q=st.text_input("週足候補を検索",placeholder="例: 6750 / エレコム",key="h_q")
 
         hout=weekly_h.copy()
+        if "本命判定" in hout.columns:
+            show_core_only=st.checkbox("本命だけ表示",value=True,key="h_core_only")
+            if show_core_only:
+                hout=hout[hout["本命判定"].astype(str)=="本命"]
         if "週足転換スコア" in hout.columns:
             hout=hout[hout["週足転換スコア"].fillna(0)>=h_min]
         if h_type!="すべて" and "週足転換タイプ" in hout.columns:
@@ -281,7 +285,7 @@ elif section=="🔄 底打ち転換":
             hout=hout.sort_values(["週足転換スコア","週出来高倍率"],ascending=[False,False])
 
         hcols=[c for c in [
-            "証券コード","Ticker","銘柄名","週足転換スコア","週足転換タイプ","終値",
+            "証券コード","Ticker","銘柄名","週足転換スコア","本命判定","週足転換タイプ","終値",
             "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA乖離%","40週MA乖離%",
             "16週ベース幅%","26週安値から週数","52週高値距離%","52週安値回復率%",
             "13週高値距離%","13週騰落率%","週出来高倍率","週RSI","過熱ペナルティ",
