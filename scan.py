@@ -1715,11 +1715,46 @@ def attach_history_stats(df: pd.DataFrame, stats: pd.DataFrame) -> pd.DataFrame:
 # ==========================================
 # 7. メイン処理
 # ==========================================
-def already_scanned_today(gc, spreadsheet_id: str, today_str: str) -> bool:
+def scheduled_session_date(now: datetime.datetime, schedule_expr: str) -> datetime.date:
     """
-    実行ログシートの最終実行日が今日と同じかどうかを返す。
-    複数時刻でトリガーされたとき、2回目以降をスキップするために使う。
+    GitHub ActionsのcronはUTC。実行が遅れてJSTの日付をまたいでも、
+    cron本来の対象取引日を返す。
     """
+    if not schedule_expr:
+        return now.date()
+    try:
+        fields = schedule_expr.strip().split()
+        if len(fields) != 5:
+            return now.date()
+        minute = int(fields[0])
+        hour = int(fields[1])
+        dow = fields[4]
+        if dow == "1-5":
+            allowed_py_weekdays = {0, 1, 2, 3, 4}
+        else:
+            allowed_py_weekdays = set()
+            for part in dow.split(","):
+                cron_d = int(part)
+                allowed_py_weekdays.add(6 if cron_d in (0, 7) else cron_d - 1)
+
+        now_utc = now.astimezone(datetime.timezone.utc)
+        for days_back in range(0, 8):
+            d = now_utc.date() - datetime.timedelta(days=days_back)
+            if d.weekday() not in allowed_py_weekdays:
+                continue
+            candidate_utc = datetime.datetime(
+                d.year, d.month, d.day, hour, minute,
+                tzinfo=datetime.timezone.utc,
+            )
+            if candidate_utc <= now_utc:
+                return candidate_utc.astimezone(JST).date()
+    except Exception as e:
+        print(f"⚠️ cron対象日解析に失敗: {schedule_expr} / {e}", flush=True)
+    return now.date()
+
+
+def already_scanned_for_session(gc, spreadsheet_id: str, session_date_str: str) -> bool:
+    """対象取引日がすでに完了済みかを実行ログから判定する。"""
     try:
         sh = gc.open_by_key(spreadsheet_id)
         ws = sh.worksheet("実行ログ")
@@ -1727,14 +1762,18 @@ def already_scanned_today(gc, spreadsheet_id: str, today_str: str) -> bool:
         if not values or len(values) < 2:
             return False
         header = values[0]
-        if "最終実行日時" not in header:
-            return False
-        idx = header.index("最終実行日時")
         last_row = values[-1]
-        if idx >= len(last_row):
-            return False
-        # 「2026-07-08 18:40:00 (水曜日, JST)」のような文字列の先頭が今日の日付か
-        return last_row[idx].startswith(today_str)
+
+        if "対象取引日" in header:
+            idx = header.index("対象取引日")
+            if idx < len(last_row):
+                return str(last_row[idx]).strip() == session_date_str
+
+        if "最終実行日時" in header:
+            idx = header.index("最終実行日時")
+            if idx < len(last_row):
+                return str(last_row[idx]).startswith(session_date_str)
+        return False
     except Exception:
         return False
 
@@ -1743,23 +1782,32 @@ def main():
     now = now_jst()
     weekday_jp = ["月","火","水","木","金","土","日"][now.weekday()]
     trigger = os.environ.get("GITHUB_EVENT_NAME", "不明（ローカル実行など）")
-    today_str = now.strftime("%Y-%m-%d")
-    print(f"=== スキャン開始: {now.strftime('%Y-%m-%d %H:%M:%S')} ({weekday_jp}曜日, JST) "
-          f"| トリガー: {trigger} ===", flush=True)
+    schedule_expr = os.environ.get("GITHUB_EVENT_SCHEDULE", "")
+    session_date = scheduled_session_date(now, schedule_expr) if trigger == "schedule" else now.date()
+    today_str = session_date.strftime("%Y-%m-%d")
 
-    # ── 当日スキャン済みチェック（複数時刻予約による二重実行を防ぐ）──
-    # スケジュール実行(schedule)のときだけチェックし、手動実行(workflow_dispatch)は常に実行する
+    try:
+        if os.path.exists(".scan_skipped"):
+            os.remove(".scan_skipped")
+    except Exception:
+        pass
+
+    print(f"=== スキャン開始: {now.strftime('%Y-%m-%d %H:%M:%S')} ({weekday_jp}曜日, JST) "
+          f"| トリガー: {trigger} | 対象取引日: {today_str} | cron: {schedule_expr or '-'} ===", flush=True)
+
+    # scheduleだけ対象取引日で重複排除。workflow_dispatchは検証のため常に実行可能。
     spreadsheet_id_early = os.environ.get("SPREADSHEET_ID")
     if trigger == "schedule" and spreadsheet_id_early:
         try:
             gc_early = get_gspread_client()
-            if already_scanned_today(gc_early, spreadsheet_id_early, today_str):
-                print(f"本日（{today_str}）はすでにスキャン済みのため、この実行はスキップします。", flush=True)
-                print("=== スキップ終了 ===", flush=True)
+            if already_scanned_for_session(gc_early, spreadsheet_id_early, today_str):
+                with open(".scan_skipped", "w", encoding="utf-8") as fp:
+                    fp.write(today_str)
+                print(f"対象取引日（{today_str}）はすでにスキャン済みのため、この予約実行はスキップします。", flush=True)
+                print("=== 重複スキップ終了 ===", flush=True)
                 return
         except Exception as e:
-            # チェックに失敗しても本処理は続行する（スキャンできない方が困るため）
-            print(f"当日スキャン済みチェックに失敗（処理は続行）: {e}", flush=True)
+            print(f"対象取引日スキャン済みチェックに失敗（処理は続行）: {e}", flush=True)
 
     tickers_all, name_map, jpx_diag = get_jpx_tickers()
     print(f"JPX取得診断: {jpx_diag}", flush=True)
@@ -1931,8 +1979,10 @@ def main():
     end_now = now_jst()
     weekday_jp_end = ["月","火","水","木","金","土","日"][end_now.weekday()]
     meta_df = pd.DataFrame([{
-        "最終実行日時": f"{today_str} {end_now.strftime('%H:%M:%S')} ({weekday_jp_end}曜日, JST)",
+        "最終実行日時": f"{end_now.strftime('%Y-%m-%d %H:%M:%S')} ({weekday_jp_end}曜日, JST)",
+        "対象取引日": today_str,
         "トリガー種別": os.environ.get("GITHUB_EVENT_NAME", "不明（ローカル実行など）"),
+        "cron": schedule_expr or "-",
         "対象銘柄数": len(tickers_all),
         "週足A件数": len(dfa),
         "週足転換H件数": len(dfh),
