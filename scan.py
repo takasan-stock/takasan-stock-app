@@ -589,6 +589,62 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     weeks13_break = _weeks_since_signal(breakout13, 16)
 
     # ─────────────────────────────────────────
+    # 急落ダメージ / 反転確認
+    # 「損切りが近い」だけで falling knife を高評価しないための安全弁。
+    # 現在週は未完成の可能性があるため、急落判定は主に前週の完成足を使う。
+    # ─────────────────────────────────────────
+    prev = d.iloc[-2]
+    prev2 = d.iloc[-3]
+    prev_close = float(prev["Close"])
+    prev_open = float(prev["Open"])
+    prev_high = float(prev["High"])
+    prev_low = float(prev["Low"])
+    prev2_close = float(prev2["Close"])
+
+    prev_week_ret = (prev_close / prev2_close - 1.0) * 100.0 if prev2_close > 0 else 0.0
+    prev_body_ret = (prev_close / prev_open - 1.0) * 100.0 if prev_open > 0 else 0.0
+    completed4_ret = (
+        (prev_close / float(d["Close"].iloc[-6]) - 1.0) * 100.0
+        if len(d) >= 6 and float(d["Close"].iloc[-6]) > 0 else 0.0
+    )
+
+    ma5_slope = float(cur["MA5_s4"]) if "MA5_s4" in d.columns and not pd.isna(cur["MA5_s4"]) else 0.0
+    below_short_ma = close < ma5 and close < ma10
+    short_ma_bearish = ma5 < ma10 and ma5_slope < 0
+    heavy_down_week = prev_week_ret <= -6.0 or prev_body_ret <= -5.0
+    four_week_damage = completed4_ret <= -8.0
+    distribution_damage = heavy_down_week and completed_vol_ratio >= 1.15
+
+    damage_points = 0
+    if prev_week_ret <= -10.0:
+        damage_points += 45
+    elif prev_week_ret <= -6.0:
+        damage_points += 30
+    elif prev_week_ret <= -4.0:
+        damage_points += 15
+
+    if prev_body_ret <= -5.0:
+        damage_points += 15
+    if four_week_damage:
+        damage_points += 15
+    if below_short_ma and short_ma_bearish:
+        damage_points += 20
+    if distribution_damage:
+        damage_points += 10
+
+    falling_knife = damage_points >= 30
+
+    # 本命化には「反転した証拠」を最低1つ要求する。
+    reclaim_short = close >= ma5 and close >= ma10
+    break_prev_high = close >= prev_high
+    turn_short_ma = ma5_slope >= 0 and close > prev_close
+    constructive_rebound = (
+        close > prev_close * 1.02
+        and float(cur["Low"]) >= prev_low * 0.99
+    )
+    reversal_confirmed = reclaim_short or break_prev_high or turn_short_ma or constructive_rebound
+
+    # ─────────────────────────────────────────
     # EARLY_TURN score（最重要）
     # 「まだ伸び切っていない」「MA近辺」「傾き改善」「高値まで余地」を厚く評価。
     # ─────────────────────────────────────────
@@ -807,6 +863,8 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
             or weeks40_reclaim <= 10
             or weeks20_slope_turn <= 4
         )
+        and not falling_knife
+        and reversal_confirmed
         and overheat_penalty <= 3.0
     )
 
@@ -838,7 +896,14 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
 
     core_ok = early_core or base_core or reaccel_core
     if setup_type == "EARLY_TURN":
-        signal_stage = "🌱初動本命" if early_core else "👀先回り監視"
+        if early_core:
+            signal_stage = "🌱初動本命"
+        elif falling_knife:
+            signal_stage = "⚠️急落後確認待ち"
+        elif not reversal_confirmed:
+            signal_stage = "👀反転確認待ち"
+        else:
+            signal_stage = "👀先回り監視"
     elif setup_type == "BASE_TURN":
         signal_stage = "🧱ベース本命" if base_core else "🧱ベース監視"
     else:
@@ -906,6 +971,15 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         + upside_score * 0.20
         + freshness_score * 0.10
     )
+
+    # falling knifeは「ストップが近い」せいで見かけ上高得点になりやすいので強く減点。
+    if falling_knife:
+        early_priority_score -= 35.0
+    elif damage_points >= 20:
+        early_priority_score -= 18.0
+    if not reversal_confirmed:
+        early_priority_score -= 10.0
+
     early_priority_score = max(0.0, min(100.0, early_priority_score))
 
     if early_priority_score >= 85:
@@ -919,7 +993,14 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     else:
         early_rank = "D"
 
-    if early_priority_score >= 78 and stop_distance <= 8.0 and upside52 >= 12.0:
+    if falling_knife:
+        early_rank = "D"
+        add_on_room = "× 急落後・反転待ち"
+    elif not reversal_confirmed:
+        if early_rank in ("S", "A"):
+            early_rank = "B"
+        add_on_room = "△ 反転確認後"
+    elif early_priority_score >= 78 and stop_distance <= 8.0 and upside52 >= 12.0:
         add_on_room = "◎ 追撃余地大"
     elif stop_distance <= 10.0 and upside52 >= 8.0:
         add_on_room = "○ 追撃余地あり"
@@ -949,6 +1030,12 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         "rr_proxy": round(min(rr_proxy, 99.0), 2),
         "freshness_weeks": int(freshness_weeks),
         "add_on_room": add_on_room,
+        "damage_points": int(damage_points),
+        "damage_flag": "⚠️急落ダメージ" if falling_knife else "✅正常",
+        "reversal_confirmed": "✅反転確認" if reversal_confirmed else "⏳未確認",
+        "prev_week_ret": round(prev_week_ret, 1),
+        "completed4_ret": round(completed4_ret, 1),
+        "ma5_slope": round(ma5_slope, 2),
         "ma5": round(ma5, 1),
         "ma20": round(ma20, 1),
         "ma40": round(ma40, 1),
@@ -1698,6 +1785,7 @@ def format_h(rows):
     d = pd.DataFrame(rows)[[
         "code","ticker","score","early_score","base_score","reaccel_score","early_priority_score","early_rank",
         "core_flag","signal_stage","setup_type","stop_price","stop_distance","upside52","rr_proxy","freshness_weeks","add_on_room",
+        "damage_points","damage_flag","reversal_confirmed","prev_week_ret","completed4_ret","ma5_slope",
         "close","ma5","ma20","ma40","slope20","slope40","s20_improve","s40_improve",
         "dist20","dist40","base_range","weeks_from_low","weeks20_reclaim","weeks40_reclaim",
         "weeks20_slope_turn","weeks40_slope_turn","high52_dist","recovery52",
