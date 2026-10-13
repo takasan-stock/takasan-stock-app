@@ -189,6 +189,7 @@ st.caption("4系統 + 決算 + RS Rating + 出来高モメンタムで総合評�
 summary=load_sheet("4系統サマリー")
 earnings=load_sheet("決算モメンタム")
 overlap=load_sheet("重複分析")
+weekly_h_header=load_sheet("週足転換H")
 log_df=load_sheet("実行ログ")
 
 if not log_df.empty:
@@ -218,10 +219,47 @@ if not summary.empty:
     strong=int((pd.to_numeric(summary.get("実戦スコア",0),errors="coerce").fillna(0)>=82).sum()) if "実戦スコア" in summary.columns else 0
     m=st.columns(5)
     m[0].metric("🔥 実戦82点以上",strong)
-    m[1].metric("🔄 TURNAROUND",turn)
+    m[1].metric("🔄 TURNAROUND母集団",turn)
     m[2].metric("🎯 PULLBACK",pull)
     m[3].metric("🚀 BREAKOUT",brk)
     m[4].metric("🔥 EARNINGS",earn)
+
+    # EARLY_TURNは「広く拾う母集団」と「実際に優先確認する銘柄」を分離表示。
+    early_candidates=0
+    early_core=0
+    early_priority_pool=0
+    if not weekly_h_header.empty:
+        wh=weekly_h_header.loc[:,~weekly_h_header.columns.duplicated(keep="first")].copy()
+        for c in ["週足転換スコア","EARLYスコア","初動優先スコア"]:
+            if c in wh.columns:
+                wh[c]=pd.to_numeric(wh[c],errors="coerce")
+
+        if "週足転換タイプ" in wh.columns:
+            early=wh[wh["週足転換タイプ"].astype(str)=="EARLY_TURN"].copy()
+        else:
+            early=pd.DataFrame()
+
+        early_candidates=len(early)
+
+        if not early.empty and "本命判定" in early.columns:
+            early_core=int((early["本命判定"].astype(str)=="本命").sum())
+
+        if not early.empty:
+            priority_mask=pd.Series(True,index=early.index)
+            if "週足転換スコア" in early.columns:
+                priority_mask &= early["週足転換スコア"].fillna(0)>=70
+            if "初動優先スコア" in early.columns:
+                priority_mask &= early["初動優先スコア"].fillna(0)>=70
+            early_priority_pool=int(priority_mask.sum())
+
+    f=st.columns(3)
+    f[0].metric("🌱 EARLY候補",early_candidates)
+    f[1].metric("🌱 EARLY本命",early_core)
+    f[2].metric("🔥 EARLY最優先",min(20,early_priority_pool))
+    st.caption(
+        f"EARLYファネル：候補 {early_candidates} → 本命 {early_core} → "
+        f"最優先TOP20 {min(20,early_priority_pool)}。候補は広く残し、実戦確認だけ絞り込みます。"
+    )
 else:
     st.warning("4系統サマリーがまだ未生成です。次回スキャン完了後に総合スコアが表示されます。")
 
