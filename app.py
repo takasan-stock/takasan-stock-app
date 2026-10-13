@@ -256,7 +256,8 @@ elif section=="🔄 底打ち転換":
     weekly_h=load_sheet("週足転換H")
     if not weekly_h.empty:
         weekly_h=numeric(weekly_h,[
-            "週足転換スコア","EARLYスコア","BASEスコア","REACCELスコア","終値",
+            "週足転換スコア","EARLYスコア","BASEスコア","REACCELスコア","初動優先スコア",
+            "想定損切り価格","想定損切り距離%","52週高値まで上値余地%","RR目安","初動鮮度週","終値",
             "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA傾き改善","40週MA傾き改善",
             "20週MA乖離%","40週MA乖離%","16週ベース幅%","26週安値から週数",
             "20週MA再奪回から週数","40週MA再奪回から週数","20週MA上向き転換から週数","40週MA上向き転換から週数",
@@ -264,13 +265,15 @@ elif section=="🔄 底打ち転換":
             "13週騰落率%","完成週出来高倍率","週RSI","過熱ペナルティ"
         ])
         st.markdown("#### 🖼️ 週足転換H｜参考チャート類似候補")
-        st.caption("EARLY_TURNを最優先。初動は60点から研究候補、70点以上＋初動条件で本命。BASEは80点、REACCELは85点から本命です。")
-        h1,h2,h3=st.columns([1.0,1.0,1.2])
+        st.caption("EARLY_TURNを最優先。候補は広く残し、『初動優先スコア』で損切りの近さ・上値余地・初動鮮度まで含めて見る順番を決めます。")
+        h1,h2,h3,h4=st.columns([1.0,1.0,1.0,1.2])
         with h1:
             h_min=st.slider("最低週足転換スコア",0,100,70,1,key="h_min_score")
         with h2:
             h_type=st.selectbox("週足転換タイプ",["すべて","EARLY_TURN","BASE_TURN","REACCEL"],key="h_type")
         with h3:
+            h_priority=st.slider("最低初動優先スコア",0,100,70,1,key="h_priority")
+        with h4:
             h_q=st.text_input("週足候補を検索",placeholder="例: 6750 / エレコム",key="h_q")
 
         hout=weekly_h.copy()
@@ -283,11 +286,13 @@ elif section=="🔄 底打ち転換":
                 hout=hout[hout["本命判定"].astype(str)=="本命"]
         if "週足転換スコア" in hout.columns:
             hout=hout[hout["週足転換スコア"].fillna(0)>=h_min]
+        if "初動優先スコア" in hout.columns:
+            hout=hout[hout["初動優先スコア"].fillna(0)>=h_priority]
         if h_type!="すべて" and "週足転換タイプ" in hout.columns:
             hout=hout[hout["週足転換タイプ"].astype(str)==h_type]
         hout=filter_search(hout,h_q)
         if "週足転換スコア" in hout.columns:
-            sort_cols=["週足転換スコア"]
+            sort_cols=["初動優先スコア"] if "初動優先スコア" in hout.columns else ["週足転換スコア"]
             sort_asc=[False]
             if "完成週出来高倍率" in hout.columns:
                 sort_cols.append("完成週出来高倍率")
@@ -298,8 +303,9 @@ elif section=="🔄 底打ち転換":
             hout=hout.sort_values(sort_cols,ascending=sort_asc)
 
         hcols=[c for c in [
-            "証券コード","Ticker","銘柄名","週足転換スコア","EARLYスコア","BASEスコア","REACCELスコア",
-            "本命判定","初動ステージ","週足転換タイプ","終値",
+            "証券コード","Ticker","銘柄名","初動優先スコア","初動ランク","EARLYスコア","週足転換スコア",
+            "本命判定","初動ステージ","週足転換タイプ","想定損切り価格","想定損切り距離%",
+            "52週高値まで上値余地%","RR目安","初動鮮度週","追撃余地","終値",
             "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA傾き改善","40週MA傾き改善",
             "20週MA乖離%","40週MA乖離%","16週ベース幅%","26週安値から週数",
             "20週MA再奪回から週数","40週MA再奪回から週数","20週MA上向き転換から週数",
@@ -308,6 +314,17 @@ elif section=="🔄 底打ち転換":
             "前回抽出日","年間抽出回数"
         ] if c in hout.columns]
         st.caption(f"週足転換H 該当 {len(hout)} 銘柄")
+        if not hout.empty and "初動優先スコア" in hout.columns:
+            topn=hout.head(20).copy()
+            st.markdown("#### 🌱 EARLY最優先 TOP20")
+            topcols=[c for c in [
+                "証券コード","Ticker","銘柄名","初動優先スコア","初動ランク","EARLYスコア",
+                "想定損切り距離%","52週高値まで上値余地%","RR目安","初動鮮度週","追撃余地",
+                "20週MA再奪回から週数","40週MA再奪回から週数"
+            ] if c in topn.columns]
+            st.dataframe(topn[topcols].reset_index(drop=True),use_container_width=True,height=360,hide_index=True)
+
+        st.markdown("#### 週足転換H 全候補")
         st.dataframe(hout[hcols].reset_index(drop=True),use_container_width=True,height=420,hide_index=True)
 
     st.markdown("#### 🔄 TURNAROUND 総合候補")
