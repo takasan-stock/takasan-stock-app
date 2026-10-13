@@ -256,24 +256,29 @@ elif section=="🔄 底打ち転換":
     weekly_h=load_sheet("週足転換H")
     if not weekly_h.empty:
         weekly_h=numeric(weekly_h,[
-            "週足転換スコア","終値","20週MA傾き%(4週)","40週MA傾き%(4週)",
+            "週足転換スコア","EARLYスコア","BASEスコア","REACCELスコア","終値",
+            "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA傾き改善","40週MA傾き改善",
             "20週MA乖離%","40週MA乖離%","16週ベース幅%","26週安値から週数",
-            "52週高値距離%","52週安値回復率%","13週高値距離%","13週騰落率%",
-            "週出来高倍率","週RSI","過熱ペナルティ"
+            "20週MA再奪回から週数","40週MA再奪回から週数","20週MA上向き転換から週数","40週MA上向き転換から週数",
+            "52週高値距離%","52週安値回復率%","13週高値距離%","13週高値ブレイクから週数",
+            "13週騰落率%","完成週出来高倍率","週RSI","過熱ペナルティ"
         ])
         st.markdown("#### 🖼️ 週足転換H｜参考チャート類似候補")
-        st.caption("68点以上は研究候補として保存。80点以上＋形状条件を満たす銘柄だけをTURNAROUND本命へ昇格します。")
+        st.caption("EARLY_TURNを最優先。初動は60点から研究候補、70点以上＋初動条件で本命。BASEは80点、REACCELは85点から本命です。")
         h1,h2,h3=st.columns([1.0,1.0,1.2])
         with h1:
-            h_min=st.slider("最低週足転換スコア",0,100,80,1,key="h_min_score")
+            h_min=st.slider("最低週足転換スコア",0,100,70,1,key="h_min_score")
         with h2:
             h_type=st.selectbox("週足転換タイプ",["すべて","EARLY_TURN","BASE_TURN","REACCEL"],key="h_type")
         with h3:
             h_q=st.text_input("週足候補を検索",placeholder="例: 6750 / エレコム",key="h_q")
 
         hout=weekly_h.copy()
+        early_focus=st.checkbox("🌱 EARLY_TURNを優先表示",value=True,key="h_early_focus")
+        if early_focus and "週足転換タイプ" in hout.columns:
+            hout=hout[hout["週足転換タイプ"].astype(str)=="EARLY_TURN"]
         if "本命判定" in hout.columns:
-            show_core_only=st.checkbox("本命だけ表示",value=True,key="h_core_only")
+            show_core_only=st.checkbox("本命だけ表示",value=False,key="h_core_only")
             if show_core_only:
                 hout=hout[hout["本命判定"].astype(str)=="本命"]
         if "週足転換スコア" in hout.columns:
@@ -285,10 +290,13 @@ elif section=="🔄 底打ち転換":
             hout=hout.sort_values(["週足転換スコア","週出来高倍率"],ascending=[False,False])
 
         hcols=[c for c in [
-            "証券コード","Ticker","銘柄名","週足転換スコア","本命判定","週足転換タイプ","終値",
-            "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA乖離%","40週MA乖離%",
-            "16週ベース幅%","26週安値から週数","52週高値距離%","52週安値回復率%",
-            "13週高値距離%","13週騰落率%","週出来高倍率","週RSI","過熱ペナルティ",
+            "証券コード","Ticker","銘柄名","週足転換スコア","EARLYスコア","BASEスコア","REACCELスコア",
+            "本命判定","初動ステージ","週足転換タイプ","終値",
+            "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA傾き改善","40週MA傾き改善",
+            "20週MA乖離%","40週MA乖離%","16週ベース幅%","26週安値から週数",
+            "20週MA再奪回から週数","40週MA再奪回から週数","20週MA上向き転換から週数",
+            "52週高値距離%","52週安値回復率%","13週高値距離%","13週高値ブレイクから週数",
+            "13週騰落率%","完成週出来高倍率","週RSI","過熱ペナルティ",
             "前回抽出日","年間抽出回数"
         ] if c in hout.columns]
         st.caption(f"週足転換H 該当 {len(hout)} 銘柄")
