@@ -287,7 +287,15 @@ elif section=="🔄 底打ち転換":
             hout=hout[hout["週足転換タイプ"].astype(str)==h_type]
         hout=filter_search(hout,h_q)
         if "週足転換スコア" in hout.columns:
-            hout=hout.sort_values(["週足転換スコア","週出来高倍率"],ascending=[False,False])
+            sort_cols=["週足転換スコア"]
+            sort_asc=[False]
+            if "完成週出来高倍率" in hout.columns:
+                sort_cols.append("完成週出来高倍率")
+                sort_asc.append(False)
+            elif "週出来高倍率" in hout.columns:  # 旧データ互換
+                sort_cols.append("週出来高倍率")
+                sort_asc.append(False)
+            hout=hout.sort_values(sort_cols,ascending=sort_asc)
 
         hcols=[c for c in [
             "証券コード","Ticker","銘柄名","週足転換スコア","EARLYスコア","BASEスコア","REACCELスコア",
