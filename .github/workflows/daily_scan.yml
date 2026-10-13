@@ -40,25 +40,37 @@ jobs:
           pip install -r requirements-scan.txt
 
       - name: JPX取得ガード付き全銘柄スキャン実行
+        id: core_scan
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-        run: python safe_scan.py
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          python safe_scan.py
+          if [ -f .scan_skipped ]; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            echo "対象取引日: $(cat .scan_skipped) / 重複予約のため本体スキャンを省略"
+          else
+            echo "skipped=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: スクリーニング4系統サマリーと重複分析を作成
+        if: steps.core_scan.outputs.skipped != 'true'
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: python category_review.py
 
       - name: 4系統サマリーへ総合スコアを付与
+        if: steps.core_scan.outputs.skipped != 'true'
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: python overall_score.py
 
       - name: 実戦スコアの事後成績を記録
+        if: steps.core_scan.outputs.skipped != 'true'
         id: performance_tracker
         continue-on-error: true
         env:
@@ -69,3 +81,14 @@ jobs:
       - name: 実戦検証エラーを警告
         if: steps.performance_tracker.outcome == 'failure'
         run: echo "::warning::実戦検証の更新に失敗しました。コアの全銘柄スキャンと総合スコア更新は正常完了しています。"
+
+      - name: 実行結果サマリー
+        if: always()
+        run: |
+          if [ "${{ steps.core_scan.outputs.skipped }}" = "true" ]; then
+            echo "## ⏭️ 重複予約をスキップ" >> "$GITHUB_STEP_SUMMARY"
+            echo "この対象取引日はすでに本スキャン完了済みです。後段の集計・スコア・実戦検証も再実行していません。" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ✅ 本スキャン実行" >> "$GITHUB_STEP_SUMMARY"
+            echo "全銘柄スキャンから4系統集計・総合スコア・実戦検証まで実行しました。" >> "$GITHUB_STEP_SUMMARY"
+          fi
