@@ -844,6 +844,88 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     else:
         signal_stage = "🚀再加速本命" if reaccel_core else "➡️再加速継続"
 
+    # ─────────────────────────────────────────
+    # EARLY専用「初動優先ランキング」
+    # 初動形状だけでなく、損切りの近さ・52週高値までの余地・新鮮さも評価する。
+    # これは探索候補を減らすフィルターではなく、見る順番を決めるための順位付け。
+    # ─────────────────────────────────────────
+    recent8_low = float(d["Low"].iloc[-8:].min()) if len(d) >= 8 else float(cur["Low"])
+    stop_candidates = []
+    for level in (ma20 * 0.98, ma40 * 0.98, recent8_low * 0.99):
+        if level > 0 and level < close:
+            stop_candidates.append(level)
+    stop_price = max(stop_candidates) if stop_candidates else max(0.01, recent8_low * 0.98)
+    stop_distance = max(0.0, (close / stop_price - 1.0) * 100.0) if stop_price > 0 else 99.0
+
+    upside52 = max(0.0, (high52 / close - 1.0) * 100.0) if close > 0 else 0.0
+    rr_proxy = upside52 / stop_distance if stop_distance > 0.1 else 99.0
+
+    if stop_distance <= 4.0:
+        risk_score = 100.0
+    elif stop_distance <= 6.0:
+        risk_score = 90.0
+    elif stop_distance <= 8.0:
+        risk_score = 75.0
+    elif stop_distance <= 10.0:
+        risk_score = 55.0
+    elif stop_distance <= 12.0:
+        risk_score = 35.0
+    else:
+        risk_score = 10.0
+
+    if 10.0 <= upside52 <= 35.0:
+        upside_score = 100.0
+    elif 5.0 <= upside52 < 10.0:
+        upside_score = 65.0
+    elif 35.0 < upside52 <= 50.0:
+        upside_score = 85.0
+    elif upside52 > 50.0:
+        upside_score = 65.0
+    else:
+        upside_score = 30.0
+
+    freshness_candidates = [
+        x for x in (weeks20_reclaim, weeks40_reclaim, weeks20_slope_turn)
+        if isinstance(x, (int, float)) and x < 999
+    ]
+    freshness_weeks = min(freshness_candidates) if freshness_candidates else 20
+    if freshness_weeks <= 2:
+        freshness_score = 100.0
+    elif freshness_weeks <= 4:
+        freshness_score = 85.0
+    elif freshness_weeks <= 6:
+        freshness_score = 70.0
+    elif freshness_weeks <= 9:
+        freshness_score = 50.0
+    else:
+        freshness_score = 30.0
+
+    early_priority_score = (
+        early_score * 0.45
+        + risk_score * 0.25
+        + upside_score * 0.20
+        + freshness_score * 0.10
+    )
+    early_priority_score = max(0.0, min(100.0, early_priority_score))
+
+    if early_priority_score >= 85:
+        early_rank = "S"
+    elif early_priority_score >= 78:
+        early_rank = "A"
+    elif early_priority_score >= 70:
+        early_rank = "B"
+    elif early_priority_score >= 62:
+        early_rank = "C"
+    else:
+        early_rank = "D"
+
+    if early_priority_score >= 78 and stop_distance <= 8.0 and upside52 >= 12.0:
+        add_on_room = "◎ 追撃余地大"
+    elif stop_distance <= 10.0 and upside52 >= 8.0:
+        add_on_room = "○ 追撃余地あり"
+    else:
+        add_on_room = "△ 追撃余地限定"
+
     ctr["H_合格"] = ctr.get("H_合格", 0) + 1
     if core_ok:
         ctr["H_本命"] = ctr.get("H_本命", 0) + 1
@@ -859,6 +941,14 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         "core_flag": "本命" if core_ok else "研究候補",
         "signal_stage": signal_stage,
         "setup_type": setup_type,
+        "early_priority_score": round(early_priority_score, 1),
+        "early_rank": early_rank,
+        "stop_price": round(stop_price, 1),
+        "stop_distance": round(stop_distance, 1),
+        "upside52": round(upside52, 1),
+        "rr_proxy": round(min(rr_proxy, 99.0), 2),
+        "freshness_weeks": int(freshness_weeks),
+        "add_on_room": add_on_room,
         "ma5": round(ma5, 1),
         "ma20": round(ma20, 1),
         "ma40": round(ma40, 1),
@@ -1606,7 +1696,8 @@ def format_a(rows):
 def format_h(rows):
     if not rows: return pd.DataFrame()
     d = pd.DataFrame(rows)[[
-        "code","ticker","score","early_score","base_score","reaccel_score","core_flag","signal_stage","setup_type",
+        "code","ticker","score","early_score","base_score","reaccel_score","early_priority_score","early_rank",
+        "core_flag","signal_stage","setup_type","stop_price","stop_distance","upside52","rr_proxy","freshness_weeks","add_on_room",
         "close","ma5","ma20","ma40","slope20","slope40","s20_improve","s40_improve",
         "dist20","dist40","base_range","weeks_from_low","weeks20_reclaim","weeks40_reclaim",
         "weeks20_slope_turn","weeks40_slope_turn","high52_dist","recovery52",
@@ -1615,7 +1706,9 @@ def format_h(rows):
     ]]
     d.columns = [
         "証券コード","Ticker","週足転換スコア","EARLYスコア","BASEスコア","REACCELスコア",
-        "本命判定","初動ステージ","週足転換タイプ","終値","5週MA","20週MA","40週MA",
+        "初動優先スコア","初動ランク","本命判定","初動ステージ","週足転換タイプ",
+        "想定損切り価格","想定損切り距離%","52週高値まで上値余地%","RR目安","初動鮮度週","追撃余地",
+        "終値","5週MA","20週MA","40週MA",
         "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA傾き改善","40週MA傾き改善",
         "20週MA乖離%","40週MA乖離%","16週ベース幅%","26週安値から週数",
         "20週MA再奪回から週数","40週MA再奪回から週数","20週MA上向き転換から週数","40週MA上向き転換から週数",
@@ -1625,8 +1718,8 @@ def format_h(rows):
     ]
     type_order = {"EARLY_TURN":0, "BASE_TURN":1, "REACCEL":2}
     d["_type_order"] = d["週足転換タイプ"].map(type_order).fillna(9)
-    d = d.sort_values(["_type_order","本命判定","週足転換スコア","完成週出来高倍率"],
-                      ascending=[True, True, False, False]).drop(columns=["_type_order"])
+    d = d.sort_values(["_type_order","初動優先スコア","週足転換スコア","完成週出来高倍率"],
+                      ascending=[True, False, False, False]).drop(columns=["_type_order"])
     return d.reset_index(drop=True)
 
 def format_b1(rows):
