@@ -919,13 +919,35 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     for level in (ma20 * 0.98, ma40 * 0.98, recent8_low * 0.99):
         if level > 0 and level < close:
             stop_candidates.append(level)
-    stop_price = max(stop_candidates) if stop_candidates else max(0.01, recent8_low * 0.98)
-    stop_distance = max(0.0, (close / stop_price - 1.0) * 100.0) if stop_price > 0 else 99.0
+
+    # まずは純粋なテクニカルストップを算出。
+    technical_stop_price = max(stop_candidates) if stop_candidates else max(0.01, recent8_low * 0.98)
+    technical_stop_distance = (
+        max(0.0, (close / technical_stop_price - 1.0) * 100.0)
+        if technical_stop_price > 0 else 99.0
+    )
+
+    # 実戦用ストップ幅は「近すぎるストップ」を補正する。
+    # 週足ATR14の55%を目安にし、最低2.5%、最大5.0%の床を設定。
+    prev_close_series = d["Close"].shift(1)
+    tr = pd.concat([
+        (d["High"] - d["Low"]).abs(),
+        (d["High"] - prev_close_series).abs(),
+        (d["Low"] - prev_close_series).abs(),
+    ], axis=1).max(axis=1)
+    atr14 = float(tr.rolling(14).mean().iloc[-1]) if len(d) >= 14 else np.nan
+    atr14_pct = (atr14 / close * 100.0) if close > 0 and not np.isnan(atr14) else 0.0
+    stop_floor_pct = max(2.5, min(5.0, atr14_pct * 0.55)) if atr14_pct > 0 else 2.5
+
+    stop_distance = max(technical_stop_distance, stop_floor_pct)
+    stop_price = close / (1.0 + stop_distance / 100.0) if close > 0 else technical_stop_price
+    stop_normalized = technical_stop_distance + 0.05 < stop_distance
 
     upside52 = max(0.0, (high52 / close - 1.0) * 100.0) if close > 0 else 0.0
-    rr_proxy = upside52 / stop_distance if stop_distance > 0.1 else 99.0
+    rr_proxy = upside52 / stop_distance if stop_distance > 0.1 else 0.0
 
-    if stop_distance <= 4.0:
+    # リスク評価も補正後の実戦ストップ幅を使う。
+    if 2.5 <= stop_distance <= 4.0:
         risk_score = 100.0
     elif stop_distance <= 6.0:
         risk_score = 90.0
@@ -1026,6 +1048,11 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         "early_rank": early_rank,
         "stop_price": round(stop_price, 1),
         "stop_distance": round(stop_distance, 1),
+        "technical_stop_price": round(technical_stop_price, 1),
+        "technical_stop_distance": round(technical_stop_distance, 1),
+        "stop_floor_pct": round(stop_floor_pct, 1),
+        "stop_normalized": "補正あり" if stop_normalized else "補正なし",
+        "atr14_pct": round(atr14_pct, 1),
         "upside52": round(upside52, 1),
         "rr_proxy": round(min(rr_proxy, 99.0), 2),
         "freshness_weeks": int(freshness_weeks),
@@ -1784,7 +1811,9 @@ def format_h(rows):
     if not rows: return pd.DataFrame()
     d = pd.DataFrame(rows)[[
         "code","ticker","score","early_score","base_score","reaccel_score","early_priority_score","early_rank",
-        "core_flag","signal_stage","setup_type","stop_price","stop_distance","upside52","rr_proxy","freshness_weeks","add_on_room",
+        "core_flag","signal_stage","setup_type","stop_price","stop_distance",
+        "technical_stop_price","technical_stop_distance","stop_floor_pct","stop_normalized","atr14_pct",
+        "upside52","rr_proxy","freshness_weeks","add_on_room",
         "damage_points","damage_flag","reversal_confirmed","prev_week_ret","completed4_ret","ma5_slope",
         "close","ma5","ma20","ma40","slope20","slope40","s20_improve","s40_improve",
         "dist20","dist40","base_range","weeks_from_low","weeks20_reclaim","weeks40_reclaim",
