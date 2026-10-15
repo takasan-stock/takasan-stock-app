@@ -645,6 +645,51 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     reversal_confirmed = reclaim_short or break_prev_high or turn_short_ma or constructive_rebound
 
     # ─────────────────────────────────────────
+    # 形状フィルター
+    # EARLY最優先に「高値圏の押し目再始動」や「下降継続中」を混ぜない。
+    # 候補には残すが、本命/TOP20からは外す。
+    # ─────────────────────────────────────────
+    # 直近52週高値からの経過週数
+    high52_pos = int(np.argmax(w52["High"].values))
+    weeks_since_52w_high = len(w52) - 1 - high52_pos
+
+    # 直近26週で20週MA上にいた割合。長く上にいるほど「底打ち」より押し目再始動寄り。
+    recent26 = d.iloc[-26:]
+    above20_ratio_26 = float((recent26["Close"] > recent26["WMA20"]).mean()) if not recent26.empty else 0.0
+    above40_ratio_26 = float((recent26["Close"] > recent26["MA40"]).mean()) if not recent26.empty else 0.0
+
+    # 高値圏押し目 / 再始動の判定
+    high_zone_pullback = (
+        weeks_since_52w_high <= 20
+        and high52_dist >= -18.0
+        and s40 >= 0.0
+        and above20_ratio_26 >= 0.55
+    )
+
+    # 明確な下降継続
+    downtrend_continuation = (
+        (close < ma20 and ma20 < ma40 and s20 < 0 and s40 < 0)
+        or (ma5 < ma10 < ma20 and ma5_slope < 0 and s20 < 0)
+        or (s20 <= -1.0 and s40 <= -0.8 and close < ma20)
+    )
+
+    # 「一瞬戻しただけ」を除く定着確認
+    above20_2w = bool(
+        len(d) >= 2
+        and float(d["Close"].iloc[-1]) > float(d["WMA20"].iloc[-1])
+        and float(d["Close"].iloc[-2]) > float(d["WMA20"].iloc[-2])
+    )
+    recent4_high_prev = float(d["High"].iloc[-5:-1].max()) if len(d) >= 5 else prev_high
+    break_recent4_high = close >= recent4_high_prev
+    stable_reversal = above20_2w or break_recent4_high or break_prev_high
+
+    shape_ok_for_early = (
+        not high_zone_pullback
+        and not downtrend_continuation
+        and stable_reversal
+    )
+
+    # ─────────────────────────────────────────
     # EARLY_TURN score（最重要）
     # 「まだ伸び切っていない」「MA近辺」「傾き改善」「高値まで余地」を厚く評価。
     # ─────────────────────────────────────────
@@ -865,6 +910,7 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         )
         and not falling_knife
         and reversal_confirmed
+        and shape_ok_for_early
         and overheat_penalty <= 3.0
     )
 
@@ -900,8 +946,12 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
             signal_stage = "🌱初動本命"
         elif falling_knife:
             signal_stage = "⚠️急落後確認待ち"
-        elif not reversal_confirmed:
-            signal_stage = "👀反転確認待ち"
+        elif downtrend_continuation:
+            signal_stage = "⬇️下降継続・除外"
+        elif high_zone_pullback:
+            signal_stage = "↗️押し目再始動・別系統"
+        elif not reversal_confirmed or not stable_reversal:
+            signal_stage = "👀反転定着待ち"
         else:
             signal_stage = "👀先回り監視"
     elif setup_type == "BASE_TURN":
@@ -1001,6 +1051,12 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         early_priority_score -= 18.0
     if not reversal_confirmed:
         early_priority_score -= 10.0
+    if downtrend_continuation:
+        early_priority_score -= 30.0
+    if high_zone_pullback:
+        early_priority_score -= 22.0
+    if not stable_reversal:
+        early_priority_score -= 12.0
 
     early_priority_score = max(0.0, min(100.0, early_priority_score))
 
@@ -1018,10 +1074,17 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     if falling_knife:
         early_rank = "D"
         add_on_room = "× 急落後・反転待ち"
-    elif not reversal_confirmed:
+    elif downtrend_continuation:
+        early_rank = "D"
+        add_on_room = "× 下降継続"
+    elif high_zone_pullback:
         if early_rank in ("S", "A"):
             early_rank = "B"
-        add_on_room = "△ 反転確認後"
+        add_on_room = "↗️ PULLBACK/REACCEL候補"
+    elif not reversal_confirmed or not stable_reversal:
+        if early_rank in ("S", "A"):
+            early_rank = "B"
+        add_on_room = "△ 反転定着後"
     elif early_priority_score >= 78 and stop_distance <= 8.0 and upside52 >= 12.0:
         add_on_room = "◎ 追撃余地大"
     elif stop_distance <= 10.0 and upside52 >= 8.0:
@@ -1063,6 +1126,13 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         "prev_week_ret": round(prev_week_ret, 1),
         "completed4_ret": round(completed4_ret, 1),
         "ma5_slope": round(ma5_slope, 2),
+        "weeks_since_52w_high": int(weeks_since_52w_high),
+        "above20_ratio_26": round(above20_ratio_26 * 100.0, 1),
+        "above40_ratio_26": round(above40_ratio_26 * 100.0, 1),
+        "high_zone_pullback": "↗️押し目再始動" if high_zone_pullback else "✅非該当",
+        "downtrend_continuation": "⬇️下降継続" if downtrend_continuation else "✅非該当",
+        "stable_reversal": "✅定着確認" if stable_reversal else "⏳未定着",
+        "shape_ok_for_early": "✅EARLY適合" if shape_ok_for_early else "×別系統/未確定",
         "ma5": round(ma5, 1),
         "ma20": round(ma20, 1),
         "ma40": round(ma40, 1),
@@ -1815,6 +1885,8 @@ def format_h(rows):
         "technical_stop_price","technical_stop_distance","stop_floor_pct","stop_normalized","atr14_pct",
         "upside52","rr_proxy","freshness_weeks","add_on_room",
         "damage_points","damage_flag","reversal_confirmed","prev_week_ret","completed4_ret","ma5_slope",
+        "weeks_since_52w_high","above20_ratio_26","above40_ratio_26",
+        "high_zone_pullback","downtrend_continuation","stable_reversal","shape_ok_for_early",
         "close","ma5","ma20","ma40","slope20","slope40","s20_improve","s40_improve",
         "dist20","dist40","base_range","weeks_from_low","weeks20_reclaim","weeks40_reclaim",
         "weeks20_slope_turn","weeks40_slope_turn","high52_dist","recovery52",
@@ -1827,6 +1899,8 @@ def format_h(rows):
         "実戦想定損切り価格","実戦想定損切り距離%","テクニカル損切り価格","テクニカル損切り距離%",
         "最低ストップ幅%","ストップ補正","週足ATR14%","52週高値まで上値余地%","RR目安","初動鮮度週","追撃余地",
         "急落ダメージ点","急落判定","反転確認","前週騰落率%","完成4週騰落率%","5週MA傾き%(4週)",
+        "52週高値から週数","26週20MA上滞在率%","26週40MA上滞在率%",
+        "押し目再始動判定","下降継続判定","反転定着","EARLY形状判定",
         "終値","5週MA","20週MA","40週MA",
         "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA傾き改善","40週MA傾き改善",
         "20週MA乖離%","40週MA乖離%","16週ベース幅%","26週安値から週数",
