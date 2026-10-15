@@ -297,7 +297,8 @@ elif section=="🔄 底打ち転換":
             "週足転換スコア","EARLYスコア","BASEスコア","REACCELスコア","初動優先スコア",
             "実戦想定損切り価格","実戦想定損切り距離%","テクニカル損切り価格","テクニカル損切り距離%",
             "最低ストップ幅%","週足ATR14%","52週高値まで上値余地%","RR目安","初動鮮度週",
-            "急落ダメージ点","前週騰落率%","完成4週騰落率%","5週MA傾き%(4週)","終値",
+            "急落ダメージ点","前週騰落率%","完成4週騰落率%","5週MA傾き%(4週)",
+            "52週高値から週数","26週20MA上滞在率%","26週40MA上滞在率%","終値",
             "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA傾き改善","40週MA傾き改善",
             "20週MA乖離%","40週MA乖離%","16週ベース幅%","26週安値から週数",
             "20週MA再奪回から週数","40週MA再奪回から週数","20週MA上向き転換から週数","40週MA上向き転換から週数",
@@ -305,7 +306,7 @@ elif section=="🔄 底打ち転換":
             "13週騰落率%","完成週出来高倍率","週RSI","過熱ペナルティ"
         ])
         st.markdown("#### 🖼️ 週足転換H｜参考チャート類似候補")
-        st.caption("EARLY_TURNを最優先。RRは週足ATRで最低ストップ幅を補正した『実戦想定損切り距離』を使い、近すぎるストップによる過大評価を防ぎます。")
+        st.caption("EARLY_TURNを最優先。TOP20は急落・下降継続・高値圏の押し目再始動を除外し、反転が定着した『底打ち初動らしい形』だけを表示します。")
         h1,h2,h3,h4=st.columns([1.0,1.0,1.0,1.2])
         with h1:
             h_min=st.slider("最低週足転換スコア",0,100,70,1,key="h_min_score")
@@ -334,6 +335,14 @@ elif section=="🔄 底打ち転換":
             early_top_source=early_top_source[early_top_source["急落判定"].astype(str)!="⚠️急落ダメージ"]
         if "反転確認" in early_top_source.columns:
             early_top_source=early_top_source[early_top_source["反転確認"].astype(str)=="✅反転確認"]
+        if "押し目再始動判定" in early_top_source.columns:
+            early_top_source=early_top_source[early_top_source["押し目再始動判定"].astype(str)!="↗️押し目再始動"]
+        if "下降継続判定" in early_top_source.columns:
+            early_top_source=early_top_source[early_top_source["下降継続判定"].astype(str)!="⬇️下降継続"]
+        if "反転定着" in early_top_source.columns:
+            early_top_source=early_top_source[early_top_source["反転定着"].astype(str)=="✅定着確認"]
+        if "EARLY形状判定" in early_top_source.columns:
+            early_top_source=early_top_source[early_top_source["EARLY形状判定"].astype(str)=="✅EARLY適合"]
         if h_type!="すべて" and "週足転換タイプ" in hout.columns:
             hout=hout[hout["週足転換タイプ"].astype(str)==h_type]
         hout=filter_search(hout,h_q)
@@ -351,6 +360,8 @@ elif section=="🔄 底打ち転換":
         hcols=[c for c in [
             "証券コード","Ticker","銘柄名","初動優先スコア","初動ランク","EARLYスコア","週足転換スコア",
             "本命判定","初動ステージ","週足転換タイプ","急落判定","急落ダメージ点","反転確認",
+            "反転定着","EARLY形状判定","押し目再始動判定","下降継続判定",
+            "52週高値から週数","26週20MA上滞在率%","26週40MA上滞在率%",
             "前週騰落率%","完成4週騰落率%","5週MA傾き%(4週)",
             "実戦想定損切り価格","実戦想定損切り距離%","テクニカル損切り価格","テクニカル損切り距離%",
             "最低ストップ幅%","ストップ補正","週足ATR14%","52週高値まで上値余地%","RR目安","初動鮮度週","追撃余地","終値",
@@ -367,7 +378,8 @@ elif section=="🔄 底打ち転換":
             st.markdown("#### 🌱 EARLY最優先 TOP20")
             topcols=[c for c in [
                 "証券コード","Ticker","銘柄名","初動優先スコア","初動ランク","EARLYスコア",
-                "急落判定","反転確認","前週騰落率%","完成4週騰落率%",
+                "急落判定","反転確認","反転定着","EARLY形状判定","押し目再始動判定","下降継続判定",
+                "52週高値から週数","26週20MA上滞在率%","前週騰落率%","完成4週騰落率%",
                 "実戦想定損切り距離%","テクニカル損切り距離%","ストップ補正","週足ATR14%",
                 "52週高値まで上値余地%","RR目安","初動鮮度週","追撃余地",
                 "20週MA再奪回から週数","40週MA再奪回から週数"
