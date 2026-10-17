@@ -125,6 +125,10 @@ def early_top20_pool(df: pd.DataFrame, min_score: float = 70.0, min_priority: fl
             else:
                 out=out[out[col].astype(str)!=val]
 
+    # 長期ステージ: 長期下降継続と長期上昇中の押し目はEARLY TOP20から除外。
+    if "長期ステージ" in out.columns:
+        out=out[~out["長期ステージ"].astype(str).isin(["STAGE4_WAIT","PULLBACK_LIKE"])]
+
     # 初動純度フィルター
     # 1) 直近4週でまだ崩れすぎていない / すでに走りすぎていない
     if "完成4週騰落率%" in out.columns:
