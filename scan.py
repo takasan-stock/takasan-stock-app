@@ -296,6 +296,9 @@ def calc_weekly(df: pd.DataFrame) -> pd.DataFrame:
     df["MA10W"]        = c.rolling(10).mean()
     df["WMA20"]        = c.rolling(20).mean()   # 週足20SMA（パターンD/H用）
     df["MA40"]         = c.rolling(40).mean()
+    df["MA50W"]        = c.rolling(50).mean()
+    df["MA150W"]       = c.rolling(150).mean()
+    df["MA200W"]       = c.rolling(200).mean()
     df["VOL10W"]       = df["Volume"].rolling(10).mean() if "Volume" in df.columns else np.nan
     df["BAND5_U"]      = df["MA5"]  * (1 + BAND5_PCT)
     df["BAND5_L"]      = df["MA5"]  * (1 - BAND5_PCT)
@@ -312,6 +315,9 @@ def calc_weekly(df: pd.DataFrame) -> pd.DataFrame:
     df["MA40_s4b"]      = df["MA40"].pct_change(4) * 100   # 週足40SMAの傾き（別名）
     df["MA5_s4"]        = df["MA5"].pct_change(4) * 100    # 週足5SMAの傾き（パターンA底打ち用）
     df["MA10W_s4"]      = df["MA10W"].pct_change(4) * 100
+    df["MA50W_s8"]       = df["MA50W"].pct_change(8) * 100
+    df["MA150W_s13"]     = df["MA150W"].pct_change(13) * 100
+    df["MA200W_s13"]     = df["MA200W"].pct_change(13) * 100
     return df
 
 def calc_daily(df: pd.DataFrame) -> pd.DataFrame:
@@ -690,6 +696,77 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     )
 
     # ─────────────────────────────────────────
+    # 長期ステージ判定
+    # 「底打ち初動」「まだStage4」「上昇トレンド中の押し目」を分離する。
+    # 150/200週MAが未計算の若い銘柄はUNKNOWN扱いで候補に残し、TOP20だけ慎重に扱う。
+    # ─────────────────────────────────────────
+    ma50w = float(cur["MA50W"]) if "MA50W" in d.columns and not pd.isna(cur["MA50W"]) else np.nan
+    ma150w = float(cur["MA150W"]) if "MA150W" in d.columns and not pd.isna(cur["MA150W"]) else np.nan
+    ma200w = float(cur["MA200W"]) if "MA200W" in d.columns and not pd.isna(cur["MA200W"]) else np.nan
+    s50w = float(cur["MA50W_s8"]) if "MA50W_s8" in d.columns and not pd.isna(cur["MA50W_s8"]) else np.nan
+    s150w = float(cur["MA150W_s13"]) if "MA150W_s13" in d.columns and not pd.isna(cur["MA150W_s13"]) else np.nan
+    s200w = float(cur["MA200W_s13"]) if "MA200W_s13" in d.columns and not pd.isna(cur["MA200W_s13"]) else np.nan
+
+    long_stage = "UNKNOWN"
+    long_stage_reason = "長期MAデータ不足"
+
+    if not np.isnan(ma50w):
+        stage4_wait = (
+            s50w <= -2.0
+            and close < ma50w
+            and (
+                np.isnan(ma200w)
+                or ma50w < ma200w
+                or (not np.isnan(s200w) and s200w < -1.0)
+            )
+        )
+
+        long_ma_stack_up = (
+            (not np.isnan(ma150w) and ma50w >= ma150w)
+            or (
+                not np.isnan(ma150w)
+                and not np.isnan(ma200w)
+                and ma150w >= ma200w
+            )
+        )
+        pullback_like_long = (
+            close >= ma50w
+            and s50w > 0
+            and long_ma_stack_up
+            and above20_ratio_26 >= 0.55
+        )
+
+        early_stage_ok = (
+            not stage4_wait
+            and not pullback_like_long
+            and (
+                s50w >= -1.0
+                or (s50w > -2.0 and s20_improve > 0 and s40_improve > 0)
+            )
+            and (
+                np.isnan(ma200w)
+                or close >= ma200w * 0.92
+                or (not np.isnan(s200w) and s200w >= -1.0)
+            )
+        )
+
+        if stage4_wait:
+            long_stage = "STAGE4_WAIT"
+            long_stage_reason = "50週MAが強く下向きで長期下降継続"
+        elif pullback_like_long:
+            long_stage = "PULLBACK_LIKE"
+            long_stage_reason = "長期上昇トレンド中の押し目"
+        elif early_stage_ok:
+            long_stage = "EARLY_STAGE_OK"
+            long_stage_reason = "長期下降が緩み短期反転が先行"
+        else:
+            long_stage = "TRANSITION"
+            long_stage_reason = "長期トレンド移行中"
+
+    # TOP20ではSTAGE4_WAIT/PULLBACK_LIKEを除外、TRANSITIONは減点。
+    long_stage_ok_for_early = long_stage in ("EARLY_STAGE_OK","TRANSITION","UNKNOWN")
+
+    # ─────────────────────────────────────────
     # EARLY_TURN score（最重要）
     # 「まだ伸び切っていない」「MA近辺」「傾き改善」「高値まで余地」を厚く評価。
     # ─────────────────────────────────────────
@@ -911,6 +988,7 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         and not falling_knife
         and reversal_confirmed
         and shape_ok_for_early
+        and long_stage_ok_for_early
         and overheat_penalty <= 3.0
     )
 
@@ -946,6 +1024,10 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
             signal_stage = "🌱初動本命"
         elif falling_knife:
             signal_stage = "⚠️急落後確認待ち"
+        elif long_stage == "STAGE4_WAIT":
+            signal_stage = "⬇️長期Stage4・待機"
+        elif long_stage == "PULLBACK_LIKE":
+            signal_stage = "↗️長期押し目・別系統"
         elif downtrend_continuation:
             signal_stage = "⬇️下降継続・除外"
         elif high_zone_pullback:
@@ -1055,6 +1137,12 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         early_priority_score -= 30.0
     if high_zone_pullback:
         early_priority_score -= 22.0
+    if long_stage == "STAGE4_WAIT":
+        early_priority_score -= 35.0
+    elif long_stage == "PULLBACK_LIKE":
+        early_priority_score -= 22.0
+    elif long_stage == "TRANSITION":
+        early_priority_score -= 6.0
     if not stable_reversal:
         early_priority_score -= 12.0
 
@@ -1074,6 +1162,13 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     if falling_knife:
         early_rank = "D"
         add_on_room = "× 急落後・反転待ち"
+    elif long_stage == "STAGE4_WAIT":
+        early_rank = "D"
+        add_on_room = "× 長期Stage4"
+    elif long_stage == "PULLBACK_LIKE":
+        if early_rank in ("S", "A"):
+            early_rank = "B"
+        add_on_room = "↗️ PULLBACK候補"
     elif downtrend_continuation:
         early_rank = "D"
         add_on_room = "× 下降継続"
@@ -1133,6 +1228,14 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         "downtrend_continuation": "⬇️下降継続" if downtrend_continuation else "✅非該当",
         "stable_reversal": "✅定着確認" if stable_reversal else "⏳未定着",
         "shape_ok_for_early": "✅EARLY適合" if shape_ok_for_early else "×別系統/未確定",
+        "long_stage": long_stage,
+        "long_stage_reason": long_stage_reason,
+        "ma50w": None if np.isnan(ma50w) else round(ma50w, 1),
+        "ma150w": None if np.isnan(ma150w) else round(ma150w, 1),
+        "ma200w": None if np.isnan(ma200w) else round(ma200w, 1),
+        "s50w": None if np.isnan(s50w) else round(s50w, 2),
+        "s150w": None if np.isnan(s150w) else round(s150w, 2),
+        "s200w": None if np.isnan(s200w) else round(s200w, 2),
         "ma5": round(ma5, 1),
         "ma20": round(ma20, 1),
         "ma40": round(ma40, 1),
@@ -1723,7 +1826,7 @@ def enrich_with_fundamentals(df: pd.DataFrame, name_map: dict | None = None,
 def process_batch(batch: list, ctr: dict, min_turnover, min_mktcap) -> tuple:
     ra, rh, rb1, rb2, rc, rd, re_, rf, rg = [], [], [], [], [], [], [], [], []
     rm_candidates = []  # 決算モメンタム候補（業績取得前の軽量プレフィルター）
-    cache_w, _ = download_batch(batch, "3y", "1wk", "週足")
+    cache_w, _ = download_batch(batch, "5y", "1wk", "週足")
     cache_d, _ = download_batch(batch, "2y", "1d",  "日足")
 
     for ticker in batch:
@@ -1878,42 +1981,57 @@ def format_a(rows):
 
 
 def format_h(rows):
-    if not rows: return pd.DataFrame()
-    d = pd.DataFrame(rows)[[
-        "code","ticker","score","early_score","base_score","reaccel_score","early_priority_score","early_rank",
-        "core_flag","signal_stage","setup_type","stop_price","stop_distance",
-        "technical_stop_price","technical_stop_distance","stop_floor_pct","stop_normalized","atr14_pct",
-        "upside52","rr_proxy","freshness_weeks","add_on_room",
-        "damage_points","damage_flag","reversal_confirmed","prev_week_ret","completed4_ret","ma5_slope",
-        "weeks_since_52w_high","above20_ratio_26","above40_ratio_26",
-        "high_zone_pullback","downtrend_continuation","stable_reversal","shape_ok_for_early",
-        "close","ma5","ma20","ma40","slope20","slope40","s20_improve","s40_improve",
-        "dist20","dist40","base_range","weeks_from_low","weeks20_reclaim","weeks40_reclaim",
-        "weeks20_slope_turn","weeks40_slope_turn","high52_dist","recovery52",
-        "dist13_high","weeks13_break","ret13","vol_ratio","rsi",
-        "overheat_penalty","avg_to","mktcap"
-    ]]
-    d.columns = [
-        "証券コード","Ticker","週足転換スコア","EARLYスコア","BASEスコア","REACCELスコア",
-        "初動優先スコア","初動ランク","本命判定","初動ステージ","週足転換タイプ",
-        "実戦想定損切り価格","実戦想定損切り距離%","テクニカル損切り価格","テクニカル損切り距離%",
-        "最低ストップ幅%","ストップ補正","週足ATR14%","52週高値まで上値余地%","RR目安","初動鮮度週","追撃余地",
-        "急落ダメージ点","急落判定","反転確認","前週騰落率%","完成4週騰落率%","5週MA傾き%(4週)",
-        "52週高値から週数","26週20MA上滞在率%","26週40MA上滞在率%",
-        "押し目再始動判定","下降継続判定","反転定着","EARLY形状判定",
-        "終値","5週MA","20週MA","40週MA",
-        "20週MA傾き%(4週)","40週MA傾き%(4週)","20週MA傾き改善","40週MA傾き改善",
-        "20週MA乖離%","40週MA乖離%","16週ベース幅%","26週安値から週数",
-        "20週MA再奪回から週数","40週MA再奪回から週数","20週MA上向き転換から週数","40週MA上向き転換から週数",
-        "52週高値距離%","52週安値回復率%","13週高値距離%","13週高値ブレイクから週数",
-        "13週騰落率%","完成週出来高倍率","週RSI",
-        "過熱ペナルティ","売買代金(億円)","時価総額(億円)"
-    ]
-    type_order = {"EARLY_TURN":0, "BASE_TURN":1, "REACCEL":2}
-    d["_type_order"] = d["週足転換タイプ"].map(type_order).fillna(9)
-    d = d.sort_values(["_type_order","初動優先スコア","週足転換スコア","完成週出来高倍率"],
-                      ascending=[True, False, False, False]).drop(columns=["_type_order"])
-    return d.reset_index(drop=True)
+    if not rows:
+        return pd.DataFrame()
+
+    rename_map = {
+        "code":"証券コード","ticker":"Ticker","score":"週足転換スコア",
+        "early_score":"EARLYスコア","base_score":"BASEスコア","reaccel_score":"REACCELスコア",
+        "early_priority_score":"初動優先スコア","early_rank":"初動ランク",
+        "core_flag":"本命判定","signal_stage":"初動ステージ","setup_type":"週足転換タイプ",
+        "stop_price":"実戦想定損切り価格","stop_distance":"実戦想定損切り距離%",
+        "technical_stop_price":"テクニカル損切り価格","technical_stop_distance":"テクニカル損切り距離%",
+        "stop_floor_pct":"最低ストップ幅%","stop_normalized":"ストップ補正","atr14_pct":"週足ATR14%",
+        "upside52":"52週高値まで上値余地%","rr_proxy":"RR目安","freshness_weeks":"初動鮮度週","add_on_room":"追撃余地",
+        "damage_points":"急落ダメージ点","damage_flag":"急落判定","reversal_confirmed":"反転確認",
+        "prev_week_ret":"前週騰落率%","completed4_ret":"完成4週騰落率%","ma5_slope":"5週MA傾き%(4週)",
+        "weeks_since_52w_high":"52週高値から週数","above20_ratio_26":"26週20MA上滞在率%",
+        "above40_ratio_26":"26週40MA上滞在率%","high_zone_pullback":"押し目再始動判定",
+        "downtrend_continuation":"下降継続判定","stable_reversal":"反転定着","shape_ok_for_early":"EARLY形状判定",
+        "long_stage":"長期ステージ","long_stage_reason":"長期ステージ理由",
+        "ma50w":"50週MA","ma150w":"150週MA","ma200w":"200週MA",
+        "s50w":"50週MA傾き%(8週)","s150w":"150週MA傾き%(13週)","s200w":"200週MA傾き%(13週)",
+        "close":"終値","ma5":"5週MA","ma20":"20週MA","ma40":"40週MA",
+        "slope20":"20週MA傾き%(4週)","slope40":"40週MA傾き%(4週)",
+        "s20_improve":"20週MA傾き改善","s40_improve":"40週MA傾き改善",
+        "dist20":"20週MA乖離%","dist40":"40週MA乖離%","base_range":"16週ベース幅%",
+        "weeks_from_low":"26週安値から週数","weeks20_reclaim":"20週MA再奪回から週数",
+        "weeks40_reclaim":"40週MA再奪回から週数","weeks20_slope_turn":"20週MA上向き転換から週数",
+        "weeks40_slope_turn":"40週MA上向き転換から週数","high52_dist":"52週高値距離%",
+        "recovery52":"52週安値回復率%","dist13_high":"13週高値距離%",
+        "weeks13_break":"13週高値ブレイクから週数","ret13":"13週騰落率%",
+        "vol_ratio":"完成週出来高倍率","rsi":"週RSI","overheat_penalty":"過熱ペナルティ",
+        "avg_to":"売買代金(億円)","mktcap":"時価総額(億円)"
+    }
+
+    d=pd.DataFrame(rows).copy()
+    wanted=[c for c in rename_map.keys() if c in d.columns]
+    d=d[wanted].rename(columns=rename_map)
+
+    type_order={"EARLY_TURN":0,"BASE_TURN":1,"REACCEL":2}
+    if "週足転換タイプ" in d.columns:
+        d["_type_order"]=d["週足転換タイプ"].map(type_order).fillna(9)
+    else:
+        d["_type_order"]=9
+
+    sort_cols=[]
+    ascending=[]
+    for col,asc in [("_type_order",True),("初動優先スコア",False),("週足転換スコア",False),("完成週出来高倍率",False)]:
+        if col in d.columns:
+            sort_cols.append(col); ascending.append(asc)
+    if sort_cols:
+        d=d.sort_values(sort_cols,ascending=ascending)
+    return d.drop(columns=["_type_order"],errors="ignore").reset_index(drop=True)
 
 def format_b1(rows):
     if not rows: return pd.DataFrame()
