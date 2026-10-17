@@ -87,6 +87,72 @@ def scalar_value(row,col,default=np.nan):
         return default
 
 
+def early_top20_pool(df: pd.DataFrame, min_score: float = 70.0, min_priority: float = 70.0) -> pd.DataFrame:
+    """
+    EARLY最優先用の純度フィルター。
+    候補/本命は広く残し、TOP20だけ「底打ち初動として今見る価値が高い形」に絞る。
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    out=df.loc[:,~df.columns.duplicated(keep="first")].copy()
+    numeric_cols=[
+        "週足転換スコア","初動優先スコア","完成4週騰落率%",
+        "20週MA再奪回から週数","40週MA再奪回から週数","40週MA乖離%"
+    ]
+    out=numeric(out,numeric_cols)
+
+    if "週足転換タイプ" in out.columns:
+        out=out[out["週足転換タイプ"].astype(str)=="EARLY_TURN"]
+    if "週足転換スコア" in out.columns:
+        out=out[out["週足転換スコア"].fillna(0)>=min_score]
+    if "初動優先スコア" in out.columns:
+        out=out[out["初動優先スコア"].fillna(0)>=min_priority]
+
+    # 既存の形状/安全フィルター
+    checks=[
+        ("急落判定","⚠️急落ダメージ",False),
+        ("反転確認","✅反転確認",True),
+        ("押し目再始動判定","↗️押し目再始動",False),
+        ("下降継続判定","⬇️下降継続",False),
+        ("反転定着","✅定着確認",True),
+        ("EARLY形状判定","✅EARLY適合",True),
+    ]
+    for col,val,must_equal in checks:
+        if col in out.columns:
+            if must_equal:
+                out=out[out[col].astype(str)==val]
+            else:
+                out=out[out[col].astype(str)!=val]
+
+    # 初動純度フィルター
+    # 1) 直近4週でまだ崩れすぎていない / すでに走りすぎていない
+    if "完成4週騰落率%" in out.columns:
+        r4=out["完成4週騰落率%"]
+        out=out[r4.between(-8.0,12.0,inclusive="both")]
+
+    # 2) 20週MA再奪回から時間が経ちすぎた銘柄は継続局面扱い
+    if "20週MA再奪回から週数" in out.columns:
+        w20=out["20週MA再奪回から週数"]
+        out=out[w20.notna() & (w20>=0) & (w20<=8) & (w20<999)]
+
+    # 3) TOP20は40週MAを実際に奪回済み、かつ8週以内を優先
+    #    未奪回は候補表には残すが「最優先」には入れない。
+    if "40週MA再奪回から週数" in out.columns:
+        w40=out["40週MA再奪回から週数"]
+        out=out[w40.notna() & (w40>=0) & (w40<=8) & (w40<999)]
+
+    if "初動優先スコア" in out.columns:
+        sort_cols=["初動優先スコア"]
+        ascending=[False]
+        if "EARLYスコア" in out.columns:
+            sort_cols.append("EARLYスコア")
+            ascending.append(False)
+        out=out.sort_values(sort_cols,ascending=ascending)
+
+    return out.reset_index(drop=True)
+
+
 def render_rank_table(df,category=None,key="rank"):
     if df.empty:
         st.info("まだデータがありません。スキャン完了後に表示されます。")
@@ -245,12 +311,7 @@ if not summary.empty:
             early_core=int((early["本命判定"].astype(str)=="本命").sum())
 
         if not early.empty:
-            priority_mask=pd.Series(True,index=early.index)
-            if "週足転換スコア" in early.columns:
-                priority_mask &= early["週足転換スコア"].fillna(0)>=70
-            if "初動優先スコア" in early.columns:
-                priority_mask &= early["初動優先スコア"].fillna(0)>=70
-            early_priority_pool=int(priority_mask.sum())
+            early_priority_pool=len(early_top20_pool(early,70,70))
 
     f=st.columns(3)
     f[0].metric("🌱 EARLY候補",early_candidates)
@@ -306,7 +367,7 @@ elif section=="🔄 底打ち転換":
             "13週騰落率%","完成週出来高倍率","週RSI","過熱ペナルティ"
         ])
         st.markdown("#### 🖼️ 週足転換H｜参考チャート類似候補")
-        st.caption("EARLY_TURNを最優先。TOP20は急落・下降継続・高値圏の押し目再始動を除外し、反転が定着した『底打ち初動らしい形』だけを表示します。")
+        st.caption("EARLY_TURNを最優先。TOP20は急落・下降継続・押し目再始動を除外し、さらに4週騰落率-8〜+12%、20/40週MA再奪回8週以内で『初動純度』を高めます。")
         h1,h2,h3,h4=st.columns([1.0,1.0,1.0,1.2])
         with h1:
             h_min=st.slider("最低週足転換スコア",0,100,70,1,key="h_min_score")
@@ -329,23 +390,13 @@ elif section=="🔄 底打ち転換":
             hout=hout[hout["週足転換スコア"].fillna(0)>=h_min]
         if "初動優先スコア" in hout.columns:
             hout=hout[hout["初動優先スコア"].fillna(0)>=h_priority]
-        # EARLY最優先では falling knife を除外。全候補表には残して状態確認できる。
-        early_top_source=hout.copy()
-        if "急落判定" in early_top_source.columns:
-            early_top_source=early_top_source[early_top_source["急落判定"].astype(str)!="⚠️急落ダメージ"]
-        if "反転確認" in early_top_source.columns:
-            early_top_source=early_top_source[early_top_source["反転確認"].astype(str)=="✅反転確認"]
-        if "押し目再始動判定" in early_top_source.columns:
-            early_top_source=early_top_source[early_top_source["押し目再始動判定"].astype(str)!="↗️押し目再始動"]
-        if "下降継続判定" in early_top_source.columns:
-            early_top_source=early_top_source[early_top_source["下降継続判定"].astype(str)!="⬇️下降継続"]
-        if "反転定着" in early_top_source.columns:
-            early_top_source=early_top_source[early_top_source["反転定着"].astype(str)=="✅定着確認"]
-        if "EARLY形状判定" in early_top_source.columns:
-            early_top_source=early_top_source[early_top_source["EARLY形状判定"].astype(str)=="✅EARLY適合"]
         if h_type!="すべて" and "週足転換タイプ" in hout.columns:
             hout=hout[hout["週足転換タイプ"].astype(str)==h_type]
         hout=filter_search(hout,h_q)
+
+        # TOP20は候補表とは別に「初動純度フィルター」を通す。
+        # 候補/本命を消さず、実戦確認する最優先だけを厳選する。
+        early_top_source=early_top20_pool(hout,h_min,h_priority)
         if "週足転換スコア" in hout.columns:
             sort_cols=["初動優先スコア"] if "初動優先スコア" in hout.columns else ["週足転換スコア"]
             sort_asc=[False]
@@ -376,13 +427,14 @@ elif section=="🔄 底打ち転換":
         if not early_top_source.empty and "初動優先スコア" in early_top_source.columns:
             topn=early_top_source.head(20).copy()
             st.markdown("#### 🌱 EARLY最優先 TOP20")
+            st.caption(f"初動純度フィルター通過 {len(early_top_source)} 銘柄から上位20を表示")
             topcols=[c for c in [
                 "証券コード","Ticker","銘柄名","初動優先スコア","初動ランク","EARLYスコア",
                 "急落判定","反転確認","反転定着","EARLY形状判定","押し目再始動判定","下降継続判定",
+                "20週MA再奪回から週数","40週MA再奪回から週数",
                 "52週高値から週数","26週20MA上滞在率%","前週騰落率%","完成4週騰落率%",
                 "実戦想定損切り距離%","テクニカル損切り距離%","ストップ補正","週足ATR14%",
-                "52週高値まで上値余地%","RR目安","初動鮮度週","追撃余地",
-                "20週MA再奪回から週数","40週MA再奪回から週数"
+                "52週高値まで上値余地%","RR目安","初動鮮度週","追撃余地"
             ] if c in topn.columns]
             st.dataframe(topn[topcols].reset_index(drop=True),use_container_width=True,height=360,hide_index=True)
 
