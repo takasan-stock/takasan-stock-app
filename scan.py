@@ -31,7 +31,7 @@ from google.oauth2.service_account import Credentials
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-10-12-v15-weekly-turnaround-score"
+SCAN_PY_VERSION = "2026-10-17-v16-early-long-stage-v2"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -710,38 +710,82 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     long_stage = "UNKNOWN"
     long_stage_reason = "長期MAデータ不足"
 
+    stage4_points = 0
+    pullback_points = 0
+
     if not np.isnan(ma50w):
+        # Stage4は単一条件ではなく、長期MAの並び/傾き/価格位置を点数化。
+        # 「50週線が少し下向き」だけで落とさず、複数の下降要素が重なった時だけ待機へ回す。
+        if s50w <= -1.5:
+            stage4_points += 2
+        elif s50w < 0:
+            stage4_points += 1
+        if close < ma50w:
+            stage4_points += 1
+        if not np.isnan(ma150w) and ma50w < ma150w:
+            stage4_points += 1
+        if not np.isnan(ma150w) and not np.isnan(ma200w) and ma150w < ma200w:
+            stage4_points += 1
+        if not np.isnan(s150w) and s150w < 0:
+            stage4_points += 1
+        if not np.isnan(s200w) and s200w < 0:
+            stage4_points += 1
+
+        bearish_long_stack = (
+            not np.isnan(ma150w)
+            and not np.isnan(ma200w)
+            and ma50w < ma150w < ma200w
+        )
         stage4_wait = (
-            s50w <= -2.0
-            and close < ma50w
-            and (
-                np.isnan(ma200w)
-                or ma50w < ma200w
-                or (not np.isnan(s200w) and s200w < -1.0)
+            stage4_points >= 4
+            or (
+                s50w <= -1.5
+                and close < ma50w
+                and bearish_long_stack
             )
         )
 
-        long_ma_stack_up = (
-            (not np.isnan(ma150w) and ma50w >= ma150w)
-            or (
-                not np.isnan(ma150w)
-                and not np.isnan(ma200w)
-                and ma150w >= ma200w
-            )
-        )
+        # 長期押し目判定も点数化。
+        # 「直近26週ずっと20週MA上」という条件に依存せず、
+        # 長期MAの上向き + 52週高値への近さで既存上昇トレンドを見抜く。
+        if close >= ma50w:
+            pullback_points += 1
+        if s50w >= 0.5:
+            pullback_points += 2
+        elif s50w > 0:
+            pullback_points += 1
+        if not np.isnan(ma150w) and ma50w >= ma150w:
+            pullback_points += 1
+        if not np.isnan(ma150w) and not np.isnan(ma200w) and ma150w >= ma200w:
+            pullback_points += 1
+        if not np.isnan(s150w) and s150w >= 0:
+            pullback_points += 1
+        if not np.isnan(s200w) and s200w >= 0:
+            pullback_points += 1
+        if high52_dist >= -15.0:
+            pullback_points += 2
+        elif high52_dist >= -25.0:
+            pullback_points += 1
+        if weeks_since_52w_high <= 26:
+            pullback_points += 1
+        if above40_ratio_26 >= 0.50:
+            pullback_points += 1
+
         pullback_like_long = (
-            close >= ma50w
-            and s50w > 0
-            and long_ma_stack_up
-            and above20_ratio_26 >= 0.55
+            pullback_points >= 5
+            and (
+                high52_dist >= -20.0
+                or weeks_since_52w_high <= 26
+            )
         )
 
         early_stage_ok = (
             not stage4_wait
             and not pullback_like_long
+            and stage4_points <= 2
             and (
                 s50w >= -1.0
-                or (s50w > -2.0 and s20_improve > 0 and s40_improve > 0)
+                or (s50w > -1.8 and s20_improve > 0 and s40_improve > 0)
             )
             and (
                 np.isnan(ma200w)
@@ -752,18 +796,18 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
 
         if stage4_wait:
             long_stage = "STAGE4_WAIT"
-            long_stage_reason = "50週MAが強く下向きで長期下降継続"
+            long_stage_reason = f"長期下降要素が強い（Stage4点 {stage4_points}）"
         elif pullback_like_long:
             long_stage = "PULLBACK_LIKE"
-            long_stage_reason = "長期上昇トレンド中の押し目"
+            long_stage_reason = f"既存上昇トレンドの押し目色が強い（押し目点 {pullback_points}）"
         elif early_stage_ok:
             long_stage = "EARLY_STAGE_OK"
-            long_stage_reason = "長期下降が緩み短期反転が先行"
+            long_stage_reason = f"長期下降が緩み短期反転が先行（Stage4点 {stage4_points}）"
         else:
             long_stage = "TRANSITION"
-            long_stage_reason = "長期トレンド移行中"
+            long_stage_reason = f"長期トレンド移行中（Stage4点 {stage4_points} / 押し目点 {pullback_points}）"
 
-    # TOP20ではSTAGE4_WAIT/PULLBACK_LIKEを除外、TRANSITIONは減点。
+    # TOP20ではSTAGE4_WAIT/PULLBACK_LIKEを除外、TRANSITIONは軽く減点。
     long_stage_ok_for_early = long_stage in ("EARLY_STAGE_OK","TRANSITION","UNKNOWN")
 
     # ─────────────────────────────────────────
@@ -1230,6 +1274,8 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         "shape_ok_for_early": "✅EARLY適合" if shape_ok_for_early else "×別系統/未確定",
         "long_stage": long_stage,
         "long_stage_reason": long_stage_reason,
+        "stage4_points": int(stage4_points),
+        "pullback_points": int(pullback_points),
         "ma50w": None if np.isnan(ma50w) else round(ma50w, 1),
         "ma150w": None if np.isnan(ma150w) else round(ma150w, 1),
         "ma200w": None if np.isnan(ma200w) else round(ma200w, 1),
@@ -1999,6 +2045,7 @@ def format_h(rows):
         "above40_ratio_26":"26週40MA上滞在率%","high_zone_pullback":"押し目再始動判定",
         "downtrend_continuation":"下降継続判定","stable_reversal":"反転定着","shape_ok_for_early":"EARLY形状判定",
         "long_stage":"長期ステージ","long_stage_reason":"長期ステージ理由",
+        "stage4_points":"長期Stage4点","pullback_points":"長期押し目点",
         "ma50w":"50週MA","ma150w":"150週MA","ma200w":"200週MA",
         "s50w":"50週MA傾き%(8週)","s150w":"150週MA傾き%(13週)","s200w":"200週MA傾き%(13週)",
         "close":"終値","ma5":"5週MA","ma20":"20週MA","ma40":"40週MA",

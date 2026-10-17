@@ -98,7 +98,8 @@ def early_top20_pool(df: pd.DataFrame, min_score: float = 70.0, min_priority: fl
     out=df.loc[:,~df.columns.duplicated(keep="first")].copy()
     numeric_cols=[
         "週足転換スコア","初動優先スコア","完成4週騰落率%",
-        "20週MA再奪回から週数","40週MA再奪回から週数","40週MA乖離%"
+        "20週MA再奪回から週数","40週MA再奪回から週数","40週MA乖離%",
+        "RR目安","実戦想定損切り距離%","長期Stage4点","長期押し目点"
     ]
     out=numeric(out,numeric_cols)
 
@@ -145,6 +146,12 @@ def early_top20_pool(df: pd.DataFrame, min_score: float = 70.0, min_priority: fl
     if "40週MA再奪回から週数" in out.columns:
         w40=out["40週MA再奪回から週数"]
         out=out[w40.notna() & (w40>=0) & (w40<=8) & (w40<999)]
+
+    # 4) 実戦RRゲート。候補は残すが、最優先は「小さく切って伸びしろがある」ものだけ。
+    if "RR目安" in out.columns:
+        out=out[out["RR目安"].notna() & (out["RR目安"]>=2.0)]
+    if "実戦想定損切り距離%" in out.columns:
+        out=out[out["実戦想定損切り距離%"].notna() & (out["実戦想定損切り距離%"]<=7.5)]
 
     if "初動優先スコア" in out.columns:
         sort_cols=["初動優先スコア"]
@@ -372,7 +379,7 @@ elif section=="🔄 底打ち転換":
             "13週騰落率%","完成週出来高倍率","週RSI","過熱ペナルティ"
         ])
         st.markdown("#### 🖼️ 週足転換H｜参考チャート類似候補")
-        st.caption("EARLY_TURNを最優先。TOP20は長期ステージも確認し、STAGE4_WAIT（長期下降継続）とPULLBACK_LIKE（長期上昇中の押し目）を除外。EARLY_STAGE_OK / TRANSITIONを優先します。")
+        st.caption("EARLY_TURNを最優先。TOP20は長期Stage4/PULLBACK_LIKEを除外し、RR≥2.0・実戦損切り≤7.5%・4週騰落率-8〜+12%・20/40週MA再奪回8週以内で厳選します。")
         h1,h2,h3,h4=st.columns([1.0,1.0,1.0,1.2])
         with h1:
             h_min=st.slider("最低週足転換スコア",0,100,70,1,key="h_min_score")
@@ -416,7 +423,7 @@ elif section=="🔄 底打ち転換":
         hcols=[c for c in [
             "証券コード","Ticker","銘柄名","初動優先スコア","初動ランク","EARLYスコア","週足転換スコア",
             "本命判定","初動ステージ","週足転換タイプ","急落判定","急落ダメージ点","反転確認",
-            "反転定着","EARLY形状判定","長期ステージ","長期ステージ理由",
+            "反転定着","EARLY形状判定","長期ステージ","長期ステージ理由","長期Stage4点","長期押し目点",
             "押し目再始動判定","下降継続判定",
             "50週MA","150週MA","200週MA","50週MA傾き%(8週)","150週MA傾き%(13週)","200週MA傾き%(13週)",
             "52週高値から週数","26週20MA上滞在率%","26週40MA上滞在率%",
@@ -437,7 +444,7 @@ elif section=="🔄 底打ち転換":
             st.caption(f"初動純度フィルター通過 {len(early_top_source)} 銘柄から上位20を表示")
             topcols=[c for c in [
                 "証券コード","Ticker","銘柄名","初動優先スコア","初動ランク","EARLYスコア",
-                "急落判定","反転確認","反転定着","EARLY形状判定","長期ステージ","長期ステージ理由",
+                "急落判定","反転確認","反転定着","EARLY形状判定","長期ステージ","長期ステージ理由","長期Stage4点","長期押し目点",
                 "押し目再始動判定","下降継続判定",
                 "20週MA再奪回から週数","40週MA再奪回から週数",
                 "52週高値から週数","26週20MA上滞在率%","前週騰落率%","完成4週騰落率%",
