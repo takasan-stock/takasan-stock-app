@@ -721,13 +721,18 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
             )
         )
 
+        long_ma_stack_up = (
+            (not np.isnan(ma150w) and ma50w >= ma150w)
+            or (
+                not np.isnan(ma150w)
+                and not np.isnan(ma200w)
+                and ma150w >= ma200w
+            )
+        )
         pullback_like_long = (
             close >= ma50w
             and s50w > 0
-            and (
-                (not np.isnan(ma150w) and ma50w >= ma150w)
-                or (not np.isnan(ma200w) and ma150w >= ma200w if not np.isnan(ma150w) else False)
-            )
+            and long_ma_stack_up
             and above20_ratio_26 >= 0.55
         )
 
