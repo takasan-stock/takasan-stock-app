@@ -31,7 +31,7 @@ from google.oauth2.service_account import Credentials
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-10-17-v16-early-long-stage-v2"
+SCAN_PY_VERSION = "2026-10-18-v17-early-long-stage-balanced"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -712,6 +712,9 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
 
     stage4_points = 0
     pullback_points = 0
+    hard_stage4 = False
+    hard_pullback = False
+    long_stage_block = "✅なし"
 
     if not np.isnan(ma50w):
         # Stage4は単一条件ではなく、長期MAの並び/傾き/価格位置を点数化。
@@ -807,8 +810,40 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
             long_stage = "TRANSITION"
             long_stage_reason = f"長期トレンド移行中（Stage4点 {stage4_points} / 押し目点 {pullback_points}）"
 
-    # TOP20ではSTAGE4_WAIT/PULLBACK_LIKEを除外、TRANSITIONは軽く減点。
-    long_stage_ok_for_early = long_stage in ("EARLY_STAGE_OK","TRANSITION","UNKNOWN")
+        # 「分類」と「ハード除外」を分離。
+        # 境界のSTAGE4_WAIT/PULLBACK_LIKEは候補に残し、
+        # 長期逆風が十分強いケースだけTOP20から外す。
+        hard_stage4 = (
+            stage4_points >= 5
+            or (
+                stage4_points >= 4
+                and s50w <= -1.0
+                and close < ma50w
+            )
+        )
+
+        long_up_stack = (
+            not np.isnan(ma150w)
+            and ma50w >= ma150w
+            and (
+                np.isnan(ma200w)
+                or ma150w >= ma200w
+            )
+        )
+        hard_pullback = (
+            pullback_points >= 7
+            and high52_dist >= -18.0
+            and s50w > 0
+            and long_up_stack
+        )
+
+        if hard_stage4:
+            long_stage_block = "× Stage4強"
+        elif hard_pullback:
+            long_stage_block = "× 長期押し目強"
+
+    # EARLY本命/TOP20は分類名ではなく「強い長期逆風」だけを除外。
+    long_stage_ok_for_early = not hard_stage4 and not hard_pullback
 
     # ─────────────────────────────────────────
     # EARLY_TURN score（最重要）
@@ -1181,12 +1216,17 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         early_priority_score -= 30.0
     if high_zone_pullback:
         early_priority_score -= 22.0
-    if long_stage == "STAGE4_WAIT":
+    if hard_stage4:
         early_priority_score -= 35.0
+    elif long_stage == "STAGE4_WAIT":
+        early_priority_score -= 8.0
+
+    if hard_pullback:
+        early_priority_score -= 18.0
     elif long_stage == "PULLBACK_LIKE":
-        early_priority_score -= 22.0
+        early_priority_score -= 5.0
     elif long_stage == "TRANSITION":
-        early_priority_score -= 6.0
+        early_priority_score -= 2.0
     if not stable_reversal:
         early_priority_score -= 12.0
 
@@ -1206,13 +1246,21 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
     if falling_knife:
         early_rank = "D"
         add_on_room = "× 急落後・反転待ち"
-    elif long_stage == "STAGE4_WAIT":
+    elif hard_stage4:
         early_rank = "D"
         add_on_room = "× 長期Stage4"
-    elif long_stage == "PULLBACK_LIKE":
+    elif hard_pullback:
         if early_rank in ("S", "A"):
             early_rank = "B"
-        add_on_room = "↗️ PULLBACK候補"
+        add_on_room = "↗️ 長期PULLBACK"
+    elif long_stage == "STAGE4_WAIT":
+        if early_rank == "S":
+            early_rank = "A"
+        add_on_room = "△ 長期Stage4境界"
+    elif long_stage == "PULLBACK_LIKE":
+        if early_rank == "S":
+            early_rank = "A"
+        add_on_room = "△ 押し目色あり"
     elif downtrend_continuation:
         early_rank = "D"
         add_on_room = "× 下降継続"
@@ -1276,6 +1324,9 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         "long_stage_reason": long_stage_reason,
         "stage4_points": int(stage4_points),
         "pullback_points": int(pullback_points),
+        "long_stage_block": long_stage_block,
+        "hard_stage4": "×" if hard_stage4 else "✅",
+        "hard_pullback": "×" if hard_pullback else "✅",
         "ma50w": None if np.isnan(ma50w) else round(ma50w, 1),
         "ma150w": None if np.isnan(ma150w) else round(ma150w, 1),
         "ma200w": None if np.isnan(ma200w) else round(ma200w, 1),
@@ -2046,6 +2097,7 @@ def format_h(rows):
         "downtrend_continuation":"下降継続判定","stable_reversal":"反転定着","shape_ok_for_early":"EARLY形状判定",
         "long_stage":"長期ステージ","long_stage_reason":"長期ステージ理由",
         "stage4_points":"長期Stage4点","pullback_points":"長期押し目点",
+        "long_stage_block":"長期ハード除外","hard_stage4":"Stage4強判定","hard_pullback":"長期押し目強判定",
         "ma50w":"50週MA","ma150w":"150週MA","ma200w":"200週MA",
         "s50w":"50週MA傾き%(8週)","s150w":"150週MA傾き%(13週)","s200w":"200週MA傾き%(13週)",
         "close":"終値","ma5":"5週MA","ma20":"20週MA","ma40":"40週MA",
