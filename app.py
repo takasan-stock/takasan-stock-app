@@ -111,13 +111,19 @@ def early_top20_audit(df: pd.DataFrame, min_score: float = 70.0, min_priority: f
     for _,row in out.iterrows():
         reasons=[]
 
-        score=row.get("週足転換スコア",np.nan)
-        if pd.notna(score) and float(score)<min_score:
-            reasons.append(f"週足転換スコア<{min_score:g}")
+        if "週足転換スコア" in out.columns:
+            score=row.get("週足転換スコア",np.nan)
+            if pd.isna(score):
+                reasons.append("週足転換スコア欠損")
+            elif float(score)<min_score:
+                reasons.append(f"週足転換スコア<{min_score:g}")
 
-        priority=row.get("初動優先スコア",np.nan)
-        if pd.notna(priority) and float(priority)<min_priority:
-            reasons.append(f"初動優先スコア<{min_priority:g}")
+        if "初動優先スコア" in out.columns:
+            priority=row.get("初動優先スコア",np.nan)
+            if pd.isna(priority):
+                reasons.append("初動優先スコア欠損")
+            elif float(priority)<min_priority:
+                reasons.append(f"初動優先スコア<{min_priority:g}")
 
         if "急落判定" in out.columns and str(row.get("急落判定",""))=="⚠️急落ダメージ":
             reasons.append("急落ダメージ")
@@ -133,32 +139,50 @@ def early_top20_audit(df: pd.DataFrame, min_score: float = 70.0, min_priority: f
             reasons.append("EARLY形状外")
 
         if "長期ハード除外" in out.columns:
-            block=str(row.get("長期ハード除外",""))
-            if block!="✅なし":
-                reasons.append(block.replace("× ","長期:"))
+            block_raw=row.get("長期ハード除外",np.nan)
+            if pd.isna(block_raw) or str(block_raw).strip()=="":
+                reasons.append("長期ハード判定欠損")
+            else:
+                block=str(block_raw)
+                if block!="✅なし":
+                    reasons.append(block.replace("× ","長期:"))
 
-        r4=row.get("完成4週騰落率%",np.nan)
-        if pd.notna(r4):
-            if float(r4)<-8.0:
+        if "完成4週騰落率%" in out.columns:
+            r4=row.get("完成4週騰落率%",np.nan)
+            if pd.isna(r4):
+                reasons.append("4週騰落率欠損")
+            elif float(r4)<-8.0:
                 reasons.append("4週下落<-8%")
             elif float(r4)>12.0:
                 reasons.append("4週上昇>12%")
 
-        w20=row.get("20週MA再奪回から週数",np.nan)
-        if pd.notna(w20) and (float(w20)<0 or float(w20)>8 or float(w20)>=999):
-            reasons.append("20週MA再奪回>8週/未奪回")
+        if "20週MA再奪回から週数" in out.columns:
+            w20=row.get("20週MA再奪回から週数",np.nan)
+            if pd.isna(w20):
+                reasons.append("20週MA再奪回欠損")
+            elif float(w20)<0 or float(w20)>8 or float(w20)>=999:
+                reasons.append("20週MA再奪回>8週/未奪回")
 
-        w40=row.get("40週MA再奪回から週数",np.nan)
-        if pd.notna(w40) and (float(w40)<0 or float(w40)>8 or float(w40)>=999):
-            reasons.append("40週MA再奪回>8週/未奪回")
+        if "40週MA再奪回から週数" in out.columns:
+            w40=row.get("40週MA再奪回から週数",np.nan)
+            if pd.isna(w40):
+                reasons.append("40週MA再奪回欠損")
+            elif float(w40)<0 or float(w40)>8 or float(w40)>=999:
+                reasons.append("40週MA再奪回>8週/未奪回")
 
-        rr=row.get("RR目安",np.nan)
-        if pd.notna(rr) and float(rr)<2.0:
-            reasons.append("RR<2.0")
+        if "RR目安" in out.columns:
+            rr=row.get("RR目安",np.nan)
+            if pd.isna(rr):
+                reasons.append("RR欠損")
+            elif float(rr)<2.0:
+                reasons.append("RR<2.0")
 
-        stop=row.get("実戦想定損切り距離%",np.nan)
-        if pd.notna(stop) and float(stop)>7.5:
-            reasons.append("損切り>7.5%")
+        if "実戦想定損切り距離%" in out.columns:
+            stop=row.get("実戦想定損切り距離%",np.nan)
+            if pd.isna(stop):
+                reasons.append("損切り距離欠損")
+            elif float(stop)>7.5:
+                reasons.append("損切り>7.5%")
 
         verdicts.append("✅通過" if not reasons else "×除外")
         reason_text.append("—" if not reasons else " / ".join(reasons))
@@ -497,6 +521,15 @@ elif section=="🔄 底打ち転換":
             passed=int((early_audit["TOP20判定"]=="✅通過").sum()) if "TOP20判定" in early_audit.columns else 0
             excluded=int((early_audit["TOP20判定"]=="×除外").sum()) if "TOP20判定" in early_audit.columns else 0
             st.caption(f"監査対象 {len(early_audit)} 銘柄 ｜ TOP20条件通過 {passed} ｜ 除外 {excluded}")
+
+            audit_csv=early_audit.to_csv(index=False,encoding="utf-8-sig").encode("utf-8-sig")
+            st.download_button(
+                "📥 EARLY監査CSVを保存",
+                data=audit_csv,
+                file_name="early_top20_audit.csv",
+                mime="text/csv",
+                key="dl_early_audit",
+            )
 
             excluded_df=early_audit[early_audit["TOP20判定"]=="×除外"].copy()
             if not excluded_df.empty:
