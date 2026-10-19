@@ -31,7 +31,7 @@ from google.oauth2.service_account import Credentials
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-10-19-v18-pullback-split"
+SCAN_PY_VERSION = "2026-10-19-v19-pullback-split-v2"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -785,32 +785,48 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
             )
         )
 
+        # 明確な既存上昇トレンドの押し目。
+        # A: 直近高値が近く、20週MA上滞在率も高い「最近まで強かった」タイプ
+        recent_trend_pullback = (
+            pullback_points >= 8
+            and s50w > 0
+            and above20_ratio_26 >= 0.55
+            and weeks_since_52w_high <= 18
+        )
+
+        # B: 高値から時間が経っていても、長期MA上昇配列と40週MA上滞在が明確なタイプ
+        established_trend_pullback = (
+            pullback_points >= 9
+            and stage4_points <= 1
+            and s50w > 0
+            and long_up_stack
+            and above40_ratio_26 >= 0.55
+        )
+
+        strong_pullback = recent_trend_pullback or established_trend_pullback
+
+        # 境界型は「長期下降要素がほぼ無い」ことを必須化。
+        # Stage4点が2以上なら、押し目と決めつけずTRANSITIONへ回す。
         pullback_border = (
-            pullback_points >= 5
+            not strong_pullback
+            and stage4_points <= 1
+            and pullback_points >= 5
             and (
                 s50w > 0
                 or long_up_stack
             )
             and (
-                high52_dist >= -25.0
+                above20_ratio_26 >= 0.35
+                or above40_ratio_26 >= 0.40
+                or high52_dist >= -25.0
                 or weeks_since_52w_high <= 26
-            )
-        )
-
-        strong_pullback = (
-            pullback_points >= 7
-            and s50w > 0
-            and long_up_stack
-            and above40_ratio_26 >= 0.50
-            and (
-                high52_dist >= -12.0
-                or weeks_since_52w_high <= 18
             )
         )
 
         early_stage_ok = (
             not stage4_wait
             and not pullback_border
+            and not strong_pullback
             and stage4_points <= 2
             and (
                 s50w >= -1.0
@@ -829,11 +845,20 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         elif strong_pullback:
             long_stage = "STRONG_PULLBACK"
             pullback_class = "STRONG_PULLBACK"
-            long_stage_reason = f"明確な既存上昇トレンドの押し目（押し目点 {pullback_points}）"
+            if recent_trend_pullback:
+                long_stage_reason = (
+                    f"直近まで強い既存上昇トレンドの押し目"
+                    f"（押し目点 {pullback_points} / 高値から{weeks_since_52w_high}週 / 20MA上{above20_ratio_26*100:.0f}%）"
+                )
+            else:
+                long_stage_reason = (
+                    f"長期上昇配列を維持した押し目"
+                    f"（押し目点 {pullback_points} / 40MA上{above40_ratio_26*100:.0f}%）"
+                )
         elif pullback_border:
             long_stage = "PULLBACK_BORDER"
             pullback_class = "PULLBACK_BORDER"
-            long_stage_reason = f"EARLYとの境界型押し目（押し目点 {pullback_points}）"
+            long_stage_reason = f"EARLYとの境界型押し目（押し目点 {pullback_points} / Stage4点 {stage4_points}）"
         elif early_stage_ok:
             long_stage = "EARLY_STAGE_OK"
             long_stage_reason = f"長期下降が緩み短期反転が先行（Stage4点 {stage4_points}）"
