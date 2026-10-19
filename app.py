@@ -379,7 +379,7 @@ elif section=="🔄 底打ち転換":
             "13週騰落率%","完成週出来高倍率","週RSI","過熱ペナルティ"
         ])
         st.markdown("#### 🖼️ 週足転換H｜参考チャート類似候補")
-        st.caption("EARLY_TURNを最優先。長期押し目は STRONG_PULLBACK（除外）と PULLBACK_BORDER（境界・残す）に分離。RR≥2.0・実戦損切り≤7.5%などの初動純度条件は維持します。")
+        st.caption("EARLY_TURNを最優先。Stage4点2以上は押し目と決めつけずTRANSITIONを優先。STRONG_PULLBACKは『直近まで強い上昇』または『長期上昇配列維持』の証拠が揃う時だけ除外します。")
         h1,h2,h3,h4=st.columns([1.0,1.0,1.0,1.2])
         with h1:
             h_min=st.slider("最低週足転換スコア",0,100,70,1,key="h_min_score")
