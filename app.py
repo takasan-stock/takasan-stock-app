@@ -87,81 +87,102 @@ def scalar_value(row,col,default=np.nan):
         return default
 
 
-def early_top20_pool(df: pd.DataFrame, min_score: float = 70.0, min_priority: float = 70.0) -> pd.DataFrame:
-    """
-    EARLY最優先用の純度フィルター。
-    候補/本命は広く残し、TOP20だけ「底打ち初動として今見る価値が高い形」に絞る。
-    """
+def early_top20_audit(df: pd.DataFrame, min_score: float = 70.0, min_priority: float = 70.0) -> pd.DataFrame:
+    """TOP20と同じ条件を評価し、通過/除外理由を銘柄ごとに残す。"""
     if df is None or df.empty:
         return pd.DataFrame()
 
     out=df.loc[:,~df.columns.duplicated(keep="first")].copy()
     numeric_cols=[
-        "週足転換スコア","初動優先スコア","完成4週騰落率%",
+        "週足転換スコア","初動優先スコア","EARLYスコア","完成4週騰落率%",
         "20週MA再奪回から週数","40週MA再奪回から週数","40週MA乖離%",
         "RR目安","実戦想定損切り距離%","長期Stage4点","長期押し目点"
     ]
     out=numeric(out,numeric_cols)
 
     if "週足転換タイプ" in out.columns:
-        out=out[out["週足転換タイプ"].astype(str)=="EARLY_TURN"]
-    if "週足転換スコア" in out.columns:
-        out=out[out["週足転換スコア"].fillna(0)>=min_score]
+        out=out[out["週足転換タイプ"].astype(str)=="EARLY_TURN"].copy()
+    if out.empty:
+        return out
+
+    verdicts=[]
+    reason_text=[]
+
+    for _,row in out.iterrows():
+        reasons=[]
+
+        score=row.get("週足転換スコア",np.nan)
+        if pd.notna(score) and float(score)<min_score:
+            reasons.append(f"週足転換スコア<{min_score:g}")
+
+        priority=row.get("初動優先スコア",np.nan)
+        if pd.notna(priority) and float(priority)<min_priority:
+            reasons.append(f"初動優先スコア<{min_priority:g}")
+
+        if "急落判定" in out.columns and str(row.get("急落判定",""))=="⚠️急落ダメージ":
+            reasons.append("急落ダメージ")
+        if "反転確認" in out.columns and str(row.get("反転確認",""))!="✅反転確認":
+            reasons.append("反転未確認")
+        if "押し目再始動判定" in out.columns and str(row.get("押し目再始動判定",""))=="↗️押し目再始動":
+            reasons.append("押し目再始動")
+        if "下降継続判定" in out.columns and str(row.get("下降継続判定",""))=="⬇️下降継続":
+            reasons.append("下降継続")
+        if "反転定着" in out.columns and str(row.get("反転定着",""))!="✅定着確認":
+            reasons.append("反転未定着")
+        if "EARLY形状判定" in out.columns and str(row.get("EARLY形状判定",""))!="✅EARLY適合":
+            reasons.append("EARLY形状外")
+
+        if "長期ハード除外" in out.columns:
+            block=str(row.get("長期ハード除外",""))
+            if block!="✅なし":
+                reasons.append(block.replace("× ","長期:"))
+
+        r4=row.get("完成4週騰落率%",np.nan)
+        if pd.notna(r4):
+            if float(r4)<-8.0:
+                reasons.append("4週下落<-8%")
+            elif float(r4)>12.0:
+                reasons.append("4週上昇>12%")
+
+        w20=row.get("20週MA再奪回から週数",np.nan)
+        if pd.notna(w20) and (float(w20)<0 or float(w20)>8 or float(w20)>=999):
+            reasons.append("20週MA再奪回>8週/未奪回")
+
+        w40=row.get("40週MA再奪回から週数",np.nan)
+        if pd.notna(w40) and (float(w40)<0 or float(w40)>8 or float(w40)>=999):
+            reasons.append("40週MA再奪回>8週/未奪回")
+
+        rr=row.get("RR目安",np.nan)
+        if pd.notna(rr) and float(rr)<2.0:
+            reasons.append("RR<2.0")
+
+        stop=row.get("実戦想定損切り距離%",np.nan)
+        if pd.notna(stop) and float(stop)>7.5:
+            reasons.append("損切り>7.5%")
+
+        verdicts.append("✅通過" if not reasons else "×除外")
+        reason_text.append("—" if not reasons else " / ".join(reasons))
+
+    out["TOP20判定"]=verdicts
+    out["TOP20除外理由"]=reason_text
+
+    sort_cols=[]
+    asc=[]
     if "初動優先スコア" in out.columns:
-        out=out[out["初動優先スコア"].fillna(0)>=min_priority]
-
-    # 既存の形状/安全フィルター
-    checks=[
-        ("急落判定","⚠️急落ダメージ",False),
-        ("反転確認","✅反転確認",True),
-        ("押し目再始動判定","↗️押し目再始動",False),
-        ("下降継続判定","⬇️下降継続",False),
-        ("反転定着","✅定着確認",True),
-        ("EARLY形状判定","✅EARLY適合",True),
-    ]
-    for col,val,must_equal in checks:
-        if col in out.columns:
-            if must_equal:
-                out=out[out[col].astype(str)==val]
-            else:
-                out=out[out[col].astype(str)!=val]
-
-    # 長期ステージは情報として残し、明確に強い長期逆風だけをTOP20から除外。
-    if "長期ハード除外" in out.columns:
-        out=out[out["長期ハード除外"].astype(str)=="✅なし"]
-
-    # 初動純度フィルター
-    # 1) 直近4週でまだ崩れすぎていない / すでに走りすぎていない
-    if "完成4週騰落率%" in out.columns:
-        r4=out["完成4週騰落率%"]
-        out=out[r4.between(-8.0,12.0,inclusive="both")]
-
-    # 2) 20週MA再奪回から時間が経ちすぎた銘柄は継続局面扱い
-    if "20週MA再奪回から週数" in out.columns:
-        w20=out["20週MA再奪回から週数"]
-        out=out[w20.notna() & (w20>=0) & (w20<=8) & (w20<999)]
-
-    # 3) TOP20は40週MAを実際に奪回済み、かつ8週以内を優先
-    #    未奪回は候補表には残すが「最優先」には入れない。
-    if "40週MA再奪回から週数" in out.columns:
-        w40=out["40週MA再奪回から週数"]
-        out=out[w40.notna() & (w40>=0) & (w40<=8) & (w40<999)]
-
-    # 4) 実戦RRゲート。候補は残すが、最優先は「小さく切って伸びしろがある」ものだけ。
-    if "RR目安" in out.columns:
-        out=out[out["RR目安"].notna() & (out["RR目安"]>=2.0)]
-    if "実戦想定損切り距離%" in out.columns:
-        out=out[out["実戦想定損切り距離%"].notna() & (out["実戦想定損切り距離%"]<=7.5)]
-
-    if "初動優先スコア" in out.columns:
-        sort_cols=["初動優先スコア"]
-        ascending=[False]
-        if "EARLYスコア" in out.columns:
-            sort_cols.append("EARLYスコア")
-            ascending.append(False)
-        out=out.sort_values(sort_cols,ascending=ascending)
+        sort_cols.append("初動優先スコア"); asc.append(False)
+    if "EARLYスコア" in out.columns:
+        sort_cols.append("EARLYスコア"); asc.append(False)
+    if sort_cols:
+        out=out.sort_values(sort_cols,ascending=asc)
 
     return out.reset_index(drop=True)
+
+
+def early_top20_pool(df: pd.DataFrame, min_score: float = 70.0, min_priority: float = 70.0) -> pd.DataFrame:
+    audit=early_top20_audit(df,min_score,min_priority)
+    if audit.empty or "TOP20判定" not in audit.columns:
+        return pd.DataFrame()
+    return audit[audit["TOP20判定"]=="✅通過"].reset_index(drop=True)
 
 
 def render_rank_table(df,category=None,key="rank"):
@@ -406,9 +427,14 @@ elif section=="🔄 底打ち転換":
             hout=hout[hout["週足転換タイプ"].astype(str)==h_type]
         hout=filter_search(hout,h_q)
 
-        # TOP20は候補表とは別に「初動純度フィルター」を通す。
-        # 候補/本命を消さず、実戦確認する最優先だけを厳選する。
-        early_top_source=early_top20_pool(hout,h_min,h_priority)
+        # TOP20と監査は、全EARLY候補を同じ判定ロジックで評価する。
+        audit_base=filter_search(weekly_h.copy(),h_q)
+        early_audit=early_top20_audit(audit_base,h_min,h_priority)
+        early_top_source=(
+            early_audit[early_audit["TOP20判定"]=="✅通過"].reset_index(drop=True)
+            if (not early_audit.empty and "TOP20判定" in early_audit.columns)
+            else pd.DataFrame()
+        )
         if "週足転換スコア" in hout.columns:
             sort_cols=["初動優先スコア"] if "初動優先スコア" in hout.columns else ["週足転換スコア"]
             sort_asc=[False]
@@ -454,6 +480,35 @@ elif section=="🔄 底打ち転換":
                 "52週高値まで上値余地%","RR目安","初動鮮度週","追撃余地"
             ] if c in topn.columns]
             st.dataframe(topn[topcols].reset_index(drop=True),use_container_width=True,height=360,hide_index=True)
+
+        if not early_audit.empty:
+            st.markdown("#### 🔎 EARLY分類・除外診断")
+            stage_series=early_audit.get("長期ステージ",pd.Series("",index=early_audit.index)).astype(str)
+            mcols=st.columns(5)
+            for stage,label,col in [
+                ("EARLY_STAGE_OK","🌱 EARLY",mcols[0]),
+                ("TRANSITION","🔄 TRANSITION",mcols[1]),
+                ("PULLBACK_BORDER","△ BORDER",mcols[2]),
+                ("STRONG_PULLBACK","↗️ STRONG",mcols[3]),
+                ("STAGE4_WAIT","⬇️ STAGE4",mcols[4]),
+            ]:
+                col.metric(label,int((stage_series==stage).sum()))
+
+            passed=int((early_audit["TOP20判定"]=="✅通過").sum()) if "TOP20判定" in early_audit.columns else 0
+            excluded=int((early_audit["TOP20判定"]=="×除外").sum()) if "TOP20判定" in early_audit.columns else 0
+            st.caption(f"監査対象 {len(early_audit)} 銘柄 ｜ TOP20条件通過 {passed} ｜ 除外 {excluded}")
+
+            excluded_df=early_audit[early_audit["TOP20判定"]=="×除外"].copy()
+            if not excluded_df.empty:
+                excols=[c for c in [
+                    "証券コード","Ticker","銘柄名","初動優先スコア","EARLYスコア",
+                    "長期ステージ","長期Stage4点","長期押し目点","長期押し目分類",
+                    "長期ハード除外","TOP20除外理由","RR目安","実戦想定損切り距離%",
+                    "完成4週騰落率%","20週MA再奪回から週数","40週MA再奪回から週数",
+                    "52週高値から週数","26週20MA上滞在率%"
+                ] if c in excluded_df.columns]
+                with st.expander("🚫 TOP20から除外された上位10銘柄",expanded=True):
+                    st.dataframe(excluded_df.head(10)[excols].reset_index(drop=True),use_container_width=True,height=330,hide_index=True)
 
         st.markdown("#### 週足転換H 全候補")
         st.dataframe(hout[hcols].reset_index(drop=True),use_container_width=True,height=420,hide_index=True)
