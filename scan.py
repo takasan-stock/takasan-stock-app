@@ -31,7 +31,7 @@ from google.oauth2.service_account import Credentials
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-10-19-v19-pullback-split-v2"
+SCAN_PY_VERSION = "2026-10-21-v20-stage4-pullback-final"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -790,17 +790,18 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
         recent_trend_pullback = (
             pullback_points >= 8
             and s50w > 0
-            and above20_ratio_26 >= 0.55
+            and above20_ratio_26 >= 0.50
             and weeks_since_52w_high <= 18
         )
 
-        # B: 高値から時間が経っていても、長期MA上昇配列と40週MA上滞在が明確なタイプ
+        # B: 高値から時間が経っていても、長期上昇配列を維持し、
+        #    52週高値から15%以内なら「底打ち」より既存上昇の押し目を優先。
         established_trend_pullback = (
             pullback_points >= 9
-            and stage4_points <= 1
+            and stage4_points == 0
             and s50w > 0
             and long_up_stack
-            and above40_ratio_26 >= 0.55
+            and high52_dist >= -15.0
         )
 
         strong_pullback = recent_trend_pullback or established_trend_pullback
@@ -867,14 +868,9 @@ def check_h(df: pd.DataFrame, ctr: dict) -> dict | None:
             long_stage_reason = f"長期トレンド移行中（Stage4点 {stage4_points} / 押し目点 {pullback_points}）"
 
         # 「分類」と「ハード除外」を分離。
-        hard_stage4 = (
-            stage4_points >= 5
-            or (
-                stage4_points >= 4
-                and s50w <= -1.0
-                and close < ma50w
-            )
-        )
+        # Stage4点4以上は「まだ下降局面の待機」として最優先から外す。
+        # 2220型のような戻り途中をEARLYに残さない。
+        hard_stage4 = stage4_points >= 4
         hard_pullback = strong_pullback
 
         if hard_stage4:
