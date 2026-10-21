@@ -184,6 +184,24 @@ def early_top20_audit(df: pd.DataFrame, min_score: float = 70.0, min_priority: f
             elif float(stop)>7.5:
                 reasons.append("損切り>7.5%")
 
+        # TRANSITION実戦効率ゲート:
+        # 長期移行途中でStage4要素が強めの銘柄は、RRか損切り効率が悪い場合のみ除外。
+        # 松竹型を落としつつ、三和HDのような高RR TRANSITIONは残す。
+        stage=str(row.get("長期ステージ",""))
+        stage4=row.get("長期Stage4点",np.nan)
+        rr=row.get("RR目安",np.nan)
+        stop=row.get("実戦想定損切り距離%",np.nan)
+        if (
+            stage=="TRANSITION"
+            and pd.notna(stage4)
+            and float(stage4)>=3
+            and (
+                (pd.notna(rr) and float(rr)<2.5)
+                or (pd.notna(stop) and float(stop)>=7.0)
+            )
+        ):
+            reasons.append("TRANSITION実戦効率不足")
+
         verdicts.append("✅通過" if not reasons else "×除外")
         reason_text.append("—" if not reasons else " / ".join(reasons))
 
@@ -424,7 +442,7 @@ elif section=="🔄 底打ち転換":
             "13週騰落率%","完成週出来高倍率","週RSI","過熱ペナルティ"
         ])
         st.markdown("#### 🖼️ 週足転換H｜参考チャート類似候補")
-        st.caption("EARLY_TURNを最優先。Stage4点2以上は押し目と決めつけずTRANSITIONを優先。STRONG_PULLBACKは『直近まで強い上昇』または『長期上昇配列維持』の証拠が揃う時だけ除外します。")
+        st.caption("EARLY_TURNを最優先。Stage4強/STRONG_PULLBACKを除外し、TRANSITIONはStage4点3以上かつRR<2.5または損切り≥7%の時だけ実戦効率不足として除外します。")
         h1,h2,h3,h4=st.columns([1.0,1.0,1.0,1.2])
         with h1:
             h_min=st.slider("最低週足転換スコア",0,100,70,1,key="h_min_score")
