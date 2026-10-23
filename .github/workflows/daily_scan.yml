@@ -82,6 +82,19 @@ jobs:
         if: steps.performance_tracker.outcome == 'failure'
         run: echo "::warning::実戦検証の更新に失敗しました。コアの全銘柄スキャンと総合スコア更新は正常完了しています。"
 
+      - name: EARLY候補の事後成績を記録
+        if: steps.core_scan.outputs.skipped != 'true'
+        id: early_performance_tracker
+        continue-on-error: true
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: python early_performance_tracker.py
+
+      - name: EARLY検証エラーを警告
+        if: steps.early_performance_tracker.outcome == 'failure'
+        run: echo "::warning::EARLY検証の更新に失敗しました。コアスキャンには影響しません。"
+
       - name: 実行結果サマリー
         if: always()
         run: |
