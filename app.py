@@ -630,9 +630,54 @@ elif section=="📊 チャート":
 
 elif section=="🧪 実戦検証":
     st.subheader("🧪 実戦スコア検証")
-    st.caption("『今日見るべき』銘柄をシグナル日終値で記録し、1・5・20営業日後の騰落率を自動追跡します。")
+    st.caption("総合スコア検証とEARLY検証を分けて追跡します。EARLYは1・2・4週後の騰落率/MFE/MAEを長期ステージ別に確認します。")
     perf=load_sheet("実戦検証")
     perf_summary=load_sheet("実戦検証サマリー")
+    early_perf=load_sheet("EARLY検証")
+    early_perf_summary=load_sheet("EARLY検証サマリー")
+
+    st.markdown("### 🌱 EARLY事後検証")
+    if early_perf_summary.empty:
+        st.info("EARLY検証データはまだありません。次回スキャン完了後から記録を開始します。")
+    else:
+        eps=numeric(early_perf_summary,[
+            "登録件数",
+            "1週件数","1週平均%","1週中央値%","1週勝率%","1週平均MFE%","1週平均MAE%",
+            "2週件数","2週平均%","2週中央値%","2週勝率%","2週平均MFE%","2週平均MAE%",
+            "4週件数","4週平均%","4週中央値%","4週勝率%","4週平均MFE%","4週平均MAE%",
+        ])
+        all_early=eps[eps["長期ステージ"].astype(str)=="ALL"] if "長期ステージ" in eps.columns else pd.DataFrame()
+        if not all_early.empty:
+            er=all_early.iloc[0]
+            ec=st.columns(5)
+            ec[0].metric("累計EARLY",int(er.get("登録件数",0) or 0))
+            ec[1].metric("1週平均",f"{float(er.get('1週平均%',0) or 0):+.2f}%")
+            ec[2].metric("1週勝率",f"{float(er.get('1週勝率%',0) or 0):.1f}%")
+            ec[3].metric("4週平均",f"{float(er.get('4週平均%',0) or 0):+.2f}%")
+            ec[4].metric("4週勝率",f"{float(er.get('4週勝率%',0) or 0):.1f}%")
+
+        st.markdown("#### 長期ステージ別")
+        early_summary_cols=[c for c in [
+            "長期ステージ","登録件数",
+            "1週件数","1週平均%","1週勝率%","1週平均MFE%","1週平均MAE%",
+            "2週件数","2週平均%","2週勝率%","2週平均MFE%","2週平均MAE%",
+            "4週件数","4週平均%","4週勝率%","4週平均MFE%","4週平均MAE%"
+        ] if c in eps.columns]
+        st.dataframe(eps[early_summary_cols],use_container_width=True,hide_index=True,height=260)
+
+    if not early_perf.empty:
+        st.markdown("#### EARLYシグナル履歴")
+        early_history_cols=[c for c in [
+            "シグナル日","証券コード","Ticker","銘柄名","初動優先スコア","初動ランク","EARLYスコア",
+            "長期ステージ","長期Stage4点","長期押し目点","RR目安","実戦想定損切り距離%",
+            "1週後騰落率%","1週MFE%","1週MAE%",
+            "2週後騰落率%","2週MFE%","2週MAE%",
+            "4週後騰落率%","4週MFE%","4週MAE%"
+        ] if c in early_perf.columns]
+        st.dataframe(early_perf[early_history_cols],use_container_width=True,hide_index=True,height=420)
+
+    st.divider()
+    st.markdown("### 🔥 総合『今日見るべき』検証")
 
     if perf_summary.empty:
         st.info("まだ検証データがありません。次回GitHub Actions実行後から記録が始まります。")
