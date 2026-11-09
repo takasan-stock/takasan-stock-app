@@ -26,12 +26,13 @@ import numpy as np
 import gspread
 
 from momentum import build_momentum_results, MOMENTUM_VERSION
+from jquants_prices import download_jquants_market_snapshot
 from google.oauth2.service_account import Credentials
 
 warnings.filterwarnings("ignore")
 
 # ── バージョン識別子（ファイルが正しく反映されているか確認するため）──
-SCAN_PY_VERSION = "2026-10-21-v20-stage4-pullback-final"
+SCAN_PY_VERSION = "2026-11-09-v21-jquants-daily-overlay"
 print(f"[診断] scan.py バージョン識別子: {SCAN_PY_VERSION}", flush=True)
 
 # GitHub ActionsのサーバーはUTCで動作するため、日本時間(JST)に明示的に変換する
@@ -262,6 +263,106 @@ def _download_once(batch: list, period: str, interval: str) -> tuple[dict, str]:
     except Exception as e:
         diag = f"例外 {type(e).__name__}"
     return result, diag
+
+
+
+def _overlay_daily_snapshot(df: pd.DataFrame, bar: dict | None) -> pd.DataFrame:
+    """J-Quants当日バーを既存日足へ上書き/追加する。"""
+    if df is None or df.empty or not bar:
+        return df
+
+    out = df.copy()
+    idx = pd.to_datetime(out.index)
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_convert("Asia/Tokyo").tz_localize(None)
+    out.index = idx.normalize()
+
+    bar_date = pd.to_datetime(bar.get("Date"), errors="coerce")
+    if pd.isna(bar_date):
+        return out
+    bar_date = bar_date.normalize()
+
+    for col in ["Open", "High", "Low", "Close", "Volume"]:
+        if col not in out.columns:
+            out[col] = np.nan
+
+    values = {c: bar.get(c) for c in ["Open", "High", "Low", "Close", "Volume"]}
+    if bar_date in out.index:
+        for col, value in values.items():
+            if value is not None and pd.notna(value):
+                out.loc[bar_date, col] = float(value)
+    else:
+        row = {c: np.nan for c in out.columns}
+        for col, value in values.items():
+            if value is not None and pd.notna(value):
+                row[col] = float(value)
+        out.loc[bar_date] = row
+
+    return out[~out.index.duplicated(keep="last")].sort_index()
+
+
+def _refresh_current_week_from_daily(
+    dfw: pd.DataFrame,
+    dfd: pd.DataFrame,
+    target_date,
+) -> pd.DataFrame:
+    """J-Quants反映済み日足から当週OHLCVを再集計し、週足最新行を更新する。"""
+    if dfw is None or dfw.empty or dfd is None or dfd.empty:
+        return dfw
+
+    out = dfw.copy()
+    widx = pd.to_datetime(out.index)
+    if getattr(widx, "tz", None) is not None:
+        widx = widx.tz_convert("Asia/Tokyo").tz_localize(None)
+    out.index = widx.normalize()
+
+    daily = dfd.copy()
+    didx = pd.to_datetime(daily.index)
+    if getattr(didx, "tz", None) is not None:
+        didx = didx.tz_convert("Asia/Tokyo").tz_localize(None)
+    daily.index = didx.normalize()
+
+    target = pd.to_datetime(target_date, errors="coerce")
+    if pd.isna(target):
+        return out
+    target = target.normalize()
+    week_start = target - pd.Timedelta(days=target.weekday())
+    week_end = week_start + pd.Timedelta(days=6)
+    cur = daily[(daily.index >= week_start) & (daily.index <= week_end)].copy()
+    if cur.empty or "Close" not in cur.columns:
+        return out
+
+    agg = {
+        "Open": float(pd.to_numeric(cur["Open"], errors="coerce").dropna().iloc[0])
+            if "Open" in cur.columns and pd.to_numeric(cur["Open"], errors="coerce").notna().any() else np.nan,
+        "High": float(pd.to_numeric(cur["High"], errors="coerce").max())
+            if "High" in cur.columns else np.nan,
+        "Low": float(pd.to_numeric(cur["Low"], errors="coerce").min())
+            if "Low" in cur.columns else np.nan,
+        "Close": float(pd.to_numeric(cur["Close"], errors="coerce").dropna().iloc[-1]),
+        "Volume": float(pd.to_numeric(cur["Volume"], errors="coerce").sum())
+            if "Volume" in cur.columns else np.nan,
+    }
+
+    for col in ["Open", "High", "Low", "Close", "Volume"]:
+        if col not in out.columns:
+            out[col] = np.nan
+
+    week_mask = (
+        (out.index >= week_start)
+        & (out.index <= week_end)
+    )
+    if week_mask.any():
+        row_idx = out.index[week_mask][-1]
+    else:
+        row_idx = week_start
+        out.loc[row_idx] = {c: np.nan for c in out.columns}
+
+    for col, value in agg.items():
+        if pd.notna(value):
+            out.loc[row_idx, col] = value
+
+    return out[~out.index.duplicated(keep="last")].sort_index()
 
 
 def download_batch(batch: list, period: str, interval: str, label: str = "") -> tuple[dict, str]:
@@ -1957,17 +2058,31 @@ def enrich_with_fundamentals(df: pd.DataFrame, name_map: dict | None = None,
 # ==========================================
 # 5. バッチ処理 & スキャン
 # ==========================================
-def process_batch(batch: list, ctr: dict, min_turnover, min_mktcap) -> tuple:
+def process_batch(batch: list, ctr: dict, min_turnover, min_mktcap, jquants_snapshot=None) -> tuple:
     ra, rh, rb1, rb2, rc, rd, re_, rf, rg = [], [], [], [], [], [], [], [], []
     rm_candidates = []  # 決算モメンタム候補（業績取得前の軽量プレフィルター）
     cache_w, _ = download_batch(batch, "5y", "1wk", "週足")
     cache_d, _ = download_batch(batch, "2y", "1d",  "日足")
+    jquants_snapshot = jquants_snapshot or {}
 
     for ticker in batch:
         code = ticker.replace(".T", "")
         try:
             dfd = cache_d.get(ticker)
-            if dfd is None: continue
+            if dfd is None:
+                continue
+
+            jq_bar = jquants_snapshot.get(ticker)
+            if jq_bar:
+                dfd = _overlay_daily_snapshot(dfd, jq_bar)
+                cache_d[ticker] = dfd
+                if ticker in cache_w:
+                    cache_w[ticker] = _refresh_current_week_from_daily(
+                        cache_w[ticker],
+                        dfd,
+                        jq_bar.get("Date"),
+                    )
+
             tmp = dfd.dropna(subset=["Close","Volume"])
             if len(tmp) < 10: continue
 
@@ -2577,6 +2692,22 @@ def main():
     print(f"JPX取得診断: {jpx_diag}", flush=True)
     print(f"対象銘柄数: {len(tickers_all)}", flush=True)
 
+    # J-Quantsはdate指定で当日全銘柄を一括取得できるため、
+    # 1銘柄ずつAPIを叩かず、当日確定OHLCVだけを既存履歴へオーバーレイする。
+    jquants_snapshot = {}
+    jquants_snapshot_status = "未使用"
+    try:
+        jquants_snapshot = download_jquants_market_snapshot(today_str)
+        if jquants_snapshot:
+            jquants_snapshot_status = f"J-Quants {today_str} / {len(jquants_snapshot)}銘柄"
+        else:
+            jquants_snapshot_status = f"J-Quants {today_str} 空 → yfinance継続"
+    except Exception as e:
+        jquants_snapshot_status = f"J-Quants取得失敗 → yfinance継続 ({type(e).__name__})"
+        print(f"⚠️ {jquants_snapshot_status}: {e}", flush=True)
+
+    print(f"株価オーバーレイ: {jquants_snapshot_status}", flush=True)
+
     batches = [tickers_all[i:i+BATCH_SIZE] for i in range(0, len(tickers_all), BATCH_SIZE)]
     total = len(batches)
     print(f"バッチ数: {total}", flush=True)
@@ -2587,8 +2718,17 @@ def main():
     t0 = time.time()
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        futures = {ex.submit(process_batch, b, ctr, MIN_AVG_TURNOVER, MIN_MARKET_CAP): i
-                   for i, b in enumerate(batches)}
+        futures = {
+            ex.submit(
+                process_batch,
+                b,
+                ctr,
+                MIN_AVG_TURNOVER,
+                MIN_MARKET_CAP,
+                jquants_snapshot,
+            ): i
+            for i, b in enumerate(batches)
+        }
         completed = 0
         for future in as_completed(futures):
             try:
@@ -2760,6 +2900,8 @@ def main():
         "ポケピG件数": len(dfg),
         "複数合致件数": len(dfm),
         "履歴保存件数": len(history),
+        "株価ソース": jquants_snapshot_status,
+        "J-Quants当日銘柄数": len(jquants_snapshot),
         "JPX取得診断": jpx_diag,
     }])
     write_df_to_sheet(gc, spreadsheet_id, "実行ログ", meta_df)

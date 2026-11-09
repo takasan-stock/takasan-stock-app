@@ -334,7 +334,13 @@ log_df=load_sheet("実行ログ")
 
 if not log_df.empty:
     last=log_df.iloc[-1]
-    st.caption(f"最終スキャン: {last.get('最終実行日時','不明')} ｜ 対象 {last.get('対象銘柄数','-')} 銘柄 ｜ トリガー: {last.get('トリガー種別','-')}")
+    source_text=str(last.get("株価ソース","")).strip()
+    source_suffix=f" ｜ 株価: {source_text}" if source_text else ""
+    st.caption(
+        f"最終スキャン: {last.get('最終実行日時','不明')} ｜ "
+        f"対象 {last.get('対象銘柄数','-')} 銘柄 ｜ "
+        f"トリガー: {last.get('トリガー種別','-')}{source_suffix}"
+    )
 
 if not summary.empty:
     data_version = str(summary.iloc[0].get("スコアバージョン", "")).strip()
