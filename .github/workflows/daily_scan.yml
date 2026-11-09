@@ -76,6 +76,7 @@ jobs:
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
         run: python performance_tracker.py
 
       - name: 実戦検証エラーを警告
@@ -89,6 +90,7 @@ jobs:
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
         run: python early_performance_tracker.py
 
       - name: EARLY検証エラーを警告
