@@ -3,11 +3,9 @@ name: 日本株スクリーナー 定期スキャン
 on:
   schedule:
     # GitHub Actionsのcronは混雑時に数時間ずれることがあるため、
-    # 「その日の夜のうちに確実に1回終わらせる」狙いで、市場終了後〜夜22時台まで
-    # 複数の時刻を予約する。scan.py側で「当日すでにスキャン済みならスキップ」するため、
+    # 「その日の夜のうちに確実に1回終わらせる」狙いで、J-Quants当日株価更新後の
+    # 17:37 JST以降〜夜22時台まで複数の時刻を予約する。scan.py側で「当日すでにスキャン済みならスキップ」するため、
     # 実際にスキャンが走るのは1日1回だけ（最初に時間内に起動できたもの）。
-    - cron: "7 6 * * 1-5"
-    - cron: "23 7 * * 1-5"
     - cron: "37 8 * * 1-5"
     - cron: "53 9 * * 1-5"
     - cron: "11 11 * * 1-5"
@@ -46,6 +44,7 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+          JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
         run: |
           python safe_scan.py
           if [ -f .scan_skipped ]; then
