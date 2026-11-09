@@ -222,7 +222,9 @@ def ensure_record_columns(df):
     for c in cols:
         if c not in df.columns:
             df[c] = ""
-    return df[cols].copy()
+    # Sheets由来の文字列dtypeへfloatを書き込むとPandas 3系でTypeErrorになるため、
+    # 更新対象はobject dtypeに統一する。保存時にwrite_sheet側で文字列化する。
+    return df[cols].copy().astype(object)
 
 
 def add_new_signals(records, current, histories):
@@ -286,6 +288,8 @@ def update_forward_returns(records, histories):
     if records.empty:
         return records
 
+    # 既存シートがStringDtypeでも、価格・騰落率の数値を安全に代入できるようにする。
+    records = records.copy().astype(object)
     now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
     horizons = [1, 5, 20]
 
