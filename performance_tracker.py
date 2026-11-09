@@ -172,6 +172,7 @@ def _download_histories_yfinance(tickers, start_date):
         for ticker in chunk:
             df = extract_one(data, ticker, single)
             if df is not None and not df.empty:
+                df.attrs["price_source"] = "yfinance"
                 result[ticker] = df
 
     return result
@@ -210,7 +211,7 @@ def ensure_record_columns(df):
         "キー", "シグナル日", "証券コード", "Ticker", "銘柄名",
         "主力シグナル", "実戦スコア", "総合スコア", "RS Rating",
         "出来高モメンタム", "主力品質", "過熱判定", "過熱ペナルティ",
-        "シグナル終値",
+        "株価ソース", "シグナル終値",
         "1日後日付", "1日後終値", "1日後騰落率%",
         "5日後日付", "5日後終値", "5日後騰落率%",
         "20日後日付", "20日後終値", "20日後騰落率%",
@@ -264,6 +265,7 @@ def add_new_signals(records, current, histories):
             "主力品質": row.get("主力品質", ""),
             "過熱判定": row.get("過熱判定", ""),
             "過熱ペナルティ": row.get("過熱ペナルティ", ""),
+            "株価ソース": str(hist.attrs.get("price_source", "不明")),
             "シグナル終値": round(entry, 4),
             "1日後日付": "", "1日後終値": "", "1日後騰落率%": "",
             "5日後日付": "", "5日後終値": "", "5日後騰落率%": "",
@@ -310,6 +312,10 @@ def update_forward_returns(records, histories):
         if pd.isna(entry) or entry <= 0:
             entry = float(eligible["Close"].iloc[pos0])
             records.at[idx, "シグナル終値"] = round(entry, 4)
+
+        source = str(hist.attrs.get("price_source", "")).strip()
+        if source:
+            records.at[idx, "株価ソース"] = source
 
         changed = False
         for h in horizons:
