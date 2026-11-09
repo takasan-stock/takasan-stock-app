@@ -19,6 +19,7 @@ Google Sheets:
 
 import os
 import json
+import time
 import traceback
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -54,13 +55,50 @@ def get_client():
     return gspread.authorize(creds), spreadsheet_id
 
 
+def _is_sheets_quota_error(exc):
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    text = str(exc).lower()
+    return (
+        status == 429
+        or "[429]" in text
+        or "quota exceeded" in text
+        or "read requests per minute" in text
+        or "write requests per minute" in text
+    )
+
+
+def _sheets_call(label, func, attempts=5):
+    """Google Sheets 429を指数バックオフで吸収する。"""
+    waits = [10, 20, 40, 60]
+    for attempt in range(attempts):
+        try:
+            return func()
+        except gspread.exceptions.APIError as exc:
+            if not _is_sheets_quota_error(exc) or attempt >= attempts - 1:
+                raise
+            wait = waits[min(attempt, len(waits) - 1)]
+            print(
+                f"[Sheets] quota hit during {label}; "
+                f"retry {attempt + 1}/{attempts - 1} after {wait}s",
+                flush=True,
+            )
+            time.sleep(wait)
+
+
 def read_sheet(sh, name):
     try:
-        ws = sh.worksheet(name)
+        ws = _sheets_call(
+            f"worksheet({name})",
+            lambda: sh.worksheet(name),
+        )
     except gspread.WorksheetNotFound:
         return pd.DataFrame()
 
-    values = ws.get_all_values()
+    values = _sheets_call(
+        f"read({name})",
+        ws.get_all_values,
+    )
     if not values or len(values) < 2:
         return pd.DataFrame()
     df = pd.DataFrame(values[1:], columns=values[0])
@@ -69,18 +107,37 @@ def read_sheet(sh, name):
 
 def write_sheet(sh, name, df):
     try:
-        ws = sh.worksheet(name)
-        ws.clear()
+        ws = _sheets_call(
+            f"worksheet({name})",
+            lambda: sh.worksheet(name),
+        )
+        _sheets_call(
+            f"clear({name})",
+            ws.clear,
+        )
     except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=name, rows=max(1000, len(df) + 50), cols=max(30, len(df.columns) + 5))
+        ws = _sheets_call(
+            f"create({name})",
+            lambda: sh.add_worksheet(
+                title=name,
+                rows=max(1000, len(df) + 50),
+                cols=max(30, len(df.columns) + 5),
+            ),
+        )
 
     if df.empty:
-        ws.update([["該当データなし"]])
+        _sheets_call(
+            f"write-empty({name})",
+            lambda: ws.update([["該当データなし"]]),
+        )
         return
 
     out = df.loc[:, ~df.columns.duplicated(keep="first")].copy()
     out = out.replace([np.inf, -np.inf], np.nan).fillna("").astype(str)
-    ws.update([out.columns.tolist()] + out.values.tolist())
+    _sheets_call(
+        f"write({name})",
+        lambda: ws.update([out.columns.tolist()] + out.values.tolist()),
+    )
 
 
 def as_num(v):
