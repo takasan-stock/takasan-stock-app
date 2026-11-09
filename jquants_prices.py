@@ -140,6 +140,7 @@ class JQuantsPriceClient:
         out = out.dropna(subset=["Close"])
         out = out[~out.index.duplicated(keep="last")].sort_index()
         out.index = out.index.normalize()
+        out.attrs["price_source"] = "J-Quants"
         return out
 
 

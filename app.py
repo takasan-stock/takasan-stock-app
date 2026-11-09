@@ -637,6 +637,7 @@ elif section=="🧪 実戦検証":
     early_perf_summary=load_sheet("EARLY検証サマリー")
 
     st.markdown("### 🌱 EARLY事後検証")
+    st.caption("株価ソース欄で、J-Quants優先取得が成功したか／yfinanceへ補完されたかを確認できます。")
     if early_perf_summary.empty:
         st.info("EARLY検証データはまだありません。次回スキャン完了後から記録を開始します。")
     else:
@@ -668,7 +669,7 @@ elif section=="🧪 実戦検証":
     if not early_perf.empty:
         st.markdown("#### EARLYシグナル履歴")
         early_history_cols=[c for c in [
-            "シグナル日","証券コード","Ticker","銘柄名","初動優先スコア","初動ランク","EARLYスコア",
+            "シグナル日","証券コード","Ticker","銘柄名","株価ソース","初動優先スコア","初動ランク","EARLYスコア",
             "長期ステージ","長期Stage4点","長期押し目点","RR目安","実戦想定損切り距離%",
             "1週後騰落率%","1週MFE%","1週MAE%",
             "2週後騰落率%","2週MFE%","2週MAE%",
@@ -703,7 +704,7 @@ elif section=="🧪 実戦検証":
     if not perf.empty:
         st.markdown("#### シグナル履歴")
         show_cols=[c for c in [
-            "シグナル日","証券コード","Ticker","銘柄名","主力シグナル","実戦スコア",
+            "シグナル日","証券コード","Ticker","銘柄名","株価ソース","主力シグナル","実戦スコア",
             "RS Rating","出来高モメンタム","シグナル終値",
             "1日後騰落率%","5日後騰落率%","20日後騰落率%","スコアバージョン"
         ] if c in perf.columns]

@@ -112,7 +112,7 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         "初動優先スコア", "初動ランク", "EARLYスコア",
         "長期ステージ", "長期Stage4点", "長期押し目点", "長期押し目分類",
         "RR目安", "実戦想定損切り距離%", "52週高値まで上値余地%",
-        "シグナル終値",
+        "株価ソース", "シグナル終値",
     ]
     for _, label in HORIZONS.items():
         base += [
@@ -171,6 +171,7 @@ def add_new_records(records: pd.DataFrame, current: pd.DataFrame, histories: dic
             "RR目安": row.get("RR目安", ""),
             "実戦想定損切り距離%": row.get("実戦想定損切り距離%", ""),
             "52週高値まで上値余地%": row.get("52週高値まで上値余地%", ""),
+            "株価ソース": str(hist.attrs.get("price_source", "不明")),
             "シグナル終値": round(entry, 4),
             "記録日時": now_str,
             "最終更新日時": now_str,
@@ -217,6 +218,10 @@ def update_records(records: pd.DataFrame, histories: dict[str, pd.DataFrame]) ->
         if pd.isna(entry) or entry <= 0:
             entry = float(hist["Close"].iloc[pos0])
             records.at[idx, "シグナル終値"] = round(entry, 4)
+
+        source = str(hist.attrs.get("price_source", "")).strip()
+        if source:
+            records.at[idx, "株価ソース"] = source
 
         changed = False
         for days, label in HORIZONS.items():
