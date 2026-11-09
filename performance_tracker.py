@@ -27,6 +27,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import gspread
+
+from jquants_prices import download_jquants_histories
 from google.oauth2.service_account import Credentials
 
 
@@ -139,7 +141,7 @@ def extract_one(downloaded, ticker, single):
         return pd.DataFrame()
 
 
-def download_histories(tickers, start_date):
+def _download_histories_yfinance(tickers, start_date):
     tickers = [t for t in dict.fromkeys(tickers) if t]
     result = {}
     if not tickers:
@@ -168,7 +170,37 @@ def download_histories(tickers, start_date):
 
         single = len(chunk) == 1
         for ticker in chunk:
-            result[ticker] = extract_one(data, ticker, single)
+            df = extract_one(data, ticker, single)
+            if df is not None and not df.empty:
+                result[ticker] = df
+
+    return result
+
+
+def download_histories(tickers, start_date):
+    """J-Quants優先。未設定/失敗/欠損銘柄だけyfinanceで補完する。"""
+    tickers = [t for t in dict.fromkeys(tickers) if t]
+    if not tickers:
+        return {}
+
+    result = {}
+    try:
+        result = download_jquants_histories(tickers, start_date)
+    except Exception as e:
+        print(f"::warning::J-Quants株価取得をスキップ: {type(e).__name__}: {e}", flush=True)
+        result = {}
+
+    missing = [t for t in tickers if t not in result or result[t] is None or result[t].empty]
+    if missing:
+        print(
+            f"[株価取得] J-Quants成功 {len(result)}/{len(tickers)} / "
+            f"yfinance補完 {len(missing)}",
+            flush=True,
+        )
+        fallback = _download_histories_yfinance(missing, start_date)
+        result.update(fallback)
+    else:
+        print(f"[株価取得] J-Quants成功 {len(result)}/{len(tickers)} / 補完なし", flush=True)
 
     return result
 
