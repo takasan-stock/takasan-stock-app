@@ -127,7 +127,8 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     for c in base:
         if c not in out.columns:
             out[c] = ""
-    return out[base].copy()
+    # Sheets由来のStringDtypeへ数値を代入する際のTypeErrorを防ぐ。
+    return out[base].copy().astype(object)
 
 
 def add_new_records(records: pd.DataFrame, current: pd.DataFrame, histories: dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -194,6 +195,8 @@ def update_records(records: pd.DataFrame, histories: dict[str, pd.DataFrame]) ->
     if records.empty:
         return records
 
+    # Sheets由来のStringDtypeでも終値・騰落率・MFE/MAEを安全に代入できるようにする。
+    records = records.copy().astype(object)
     now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
 
     for idx, row in records.iterrows():
