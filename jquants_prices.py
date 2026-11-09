@@ -144,6 +144,63 @@ class JQuantsPriceClient:
         return out
 
 
+
+def download_jquants_market_snapshot(target_date) -> dict[str, dict]:
+    """指定日の全銘柄日足を1回のdate指定で取得し、Ticker別辞書にする。"""
+    client = JQuantsPriceClient.from_env()
+    if client is None:
+        return {}
+
+    date_text = _date_text(target_date)
+    if not date_text:
+        return {}
+
+    rows = client._get(
+        "/equities/bars/daily",
+        {"date": date_text},
+    )
+    if not rows:
+        print(f"[J-Quants] market snapshot empty: {date_text}", flush=True)
+        return {}
+
+    raw = pd.DataFrame.from_records(rows)
+    if raw.empty or "Code" not in raw.columns:
+        print(f"[J-Quants] market snapshot invalid payload: {date_text}", flush=True)
+        return {}
+
+    result: dict[str, dict] = {}
+    for _, row in raw.iterrows():
+        code = _code4(row.get("Code"))
+        if not code:
+            continue
+
+        def pick(*names):
+            for name in names:
+                if name in raw.columns:
+                    value = pd.to_numeric(pd.Series([row.get(name)]), errors="coerce").iloc[0]
+                    if pd.notna(value):
+                        return float(value)
+            return None
+
+        close = pick("AdjC", "C")
+        if close is None:
+            continue
+
+        result[f"{code}.T"] = {
+            "Date": date_text,
+            "Open": pick("AdjO", "O"),
+            "High": pick("AdjH", "H"),
+            "Low": pick("AdjL", "L"),
+            "Close": close,
+            "Volume": pick("AdjVo", "Vo"),
+        }
+
+    print(
+        f"[J-Quants] market snapshot {date_text}: {len(result)} tickers",
+        flush=True,
+    )
+    return result
+
 def download_jquants_histories(
     tickers: Iterable[str],
     start_date,
