@@ -75,6 +75,38 @@ def filter_search(df,q):
     return df[mask]
 
 
+def summarize_early_groups(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
+    """EARLY実績を任意の区分で1/2/4週集計する。"""
+    if df is None or df.empty or group_col not in df.columns:
+        return pd.DataFrame()
+
+    work=df.copy()
+    numeric_cols=[
+        "1週後騰落率%","1週MFE%","1週MAE%",
+        "2週後騰落率%","2週MFE%","2週MAE%",
+        "4週後騰落率%","4週MFE%","4週MAE%",
+    ]
+    work=numeric(work,numeric_cols)
+    rows=[]
+    for name,g in work.groupby(group_col,dropna=False,sort=False):
+        label=str(name).strip()
+        if not label or label.lower()=="nan":
+            label="不明"
+        row={"区分":label,"登録件数":int(len(g))}
+        for h in ["1週","2週","4週"]:
+            ret=g[f"{h}後騰落率%"].dropna()
+            mfe=g[f"{h}MFE%"].dropna()
+            mae=g[f"{h}MAE%"].dropna()
+            row[f"{h}件数"]=int(len(ret))
+            row[f"{h}平均%"]=round(float(ret.mean()),2) if len(ret) else np.nan
+            row[f"{h}中央値%"]=round(float(ret.median()),2) if len(ret) else np.nan
+            row[f"{h}勝率%"]=round(float((ret>0).mean()*100),1) if len(ret) else np.nan
+            row[f"{h}平均MFE%"]=round(float(mfe.mean()),2) if len(mfe) else np.nan
+            row[f"{h}平均MAE%"]=round(float(mae.mean()),2) if len(mae) else np.nan
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def scalar_value(row,col,default=np.nan):
     try:
         v=row[col]
@@ -673,6 +705,69 @@ elif section=="🧪 実戦検証":
         st.dataframe(eps[early_summary_cols],use_container_width=True,hide_index=True,height=260)
 
     if not early_perf.empty:
+        ep=numeric(early_perf,[
+            "RR目安","実戦想定損切り距離%",
+            "1週後騰落率%","1週MFE%","1週MAE%",
+            "2週後騰落率%","2週MFE%","2週MAE%",
+            "4週後騰落率%","4週MFE%","4週MAE%"
+        ])
+
+        st.markdown("#### 📊 EARLY実績の切り分け")
+        st.caption("登録件数より各期間の件数を重視してください。1週/2週/4週の観測が揃っていない新しいシグナルは、その期間の集計にはまだ入りません。")
+
+        if "RR目安" in ep.columns:
+            ep["RR帯"]=pd.cut(
+                ep["RR目安"],
+                bins=[-np.inf,3.0,5.0,np.inf],
+                labels=["RR 2–3","RR 3–5","RR 5+"],
+                right=False,
+            ).astype(str)
+        if "実戦想定損切り距離%" in ep.columns:
+            ep["損切り幅"]=pd.cut(
+                ep["実戦想定損切り距離%"],
+                bins=[-np.inf,3.0,5.0,7.5,np.inf],
+                labels=["≤3%","3–5%","5–7.5%",">7.5%"],
+                right=True,
+                include_lowest=True,
+            ).astype(str)
+
+        tabs=st.tabs(["長期ステージ","RR帯","損切り幅"])
+        group_defs=[
+            ("長期ステージ",tabs[0]),
+            ("RR帯",tabs[1]),
+            ("損切り幅",tabs[2]),
+        ]
+        for group_col,tab in group_defs:
+            with tab:
+                summary_df=summarize_early_groups(ep,group_col)
+                if summary_df.empty:
+                    st.info("集計できるデータがまだありません。")
+                else:
+                    show=[c for c in [
+                        "区分","登録件数",
+                        "1週件数","1週平均%","1週勝率%","1週平均MFE%","1週平均MAE%",
+                        "2週件数","2週平均%","2週勝率%","2週平均MFE%","2週平均MAE%",
+                        "4週件数","4週平均%","4週勝率%","4週平均MFE%","4週平均MAE%"
+                    ] if c in summary_df.columns]
+                    st.dataframe(summary_df[show],use_container_width=True,hide_index=True,height=260)
+
+                    mature4=summary_df[pd.to_numeric(summary_df["4週件数"],errors="coerce").fillna(0)>=10].copy()
+                    if mature4.empty:
+                        st.caption("4週後が10件以上たまった区分から、優劣判断の参考にします。現時点では過学習防止のため自動判定しません。")
+                    else:
+                        mature4["_score"]=(
+                            pd.to_numeric(mature4["4週平均%"],errors="coerce").fillna(-999)
+                            + pd.to_numeric(mature4["4週勝率%"],errors="coerce").fillna(0)*0.03
+                            + pd.to_numeric(mature4["4週平均MFE%"],errors="coerce").fillna(0)*0.15
+                            + pd.to_numeric(mature4["4週平均MAE%"],errors="coerce").fillna(0)*0.10
+                        )
+                        best=mature4.sort_values("_score",ascending=False).iloc[0]
+                        st.success(
+                            f"4週観測10件以上では『{best['区分']}』が暫定トップ。"
+                            f" 平均 {float(best['4週平均%']):+.2f}% / 勝率 {float(best['4週勝率%']):.1f}% / "
+                            f"MFE {float(best['4週平均MFE%']):+.2f}% / MAE {float(best['4週平均MAE%']):+.2f}%"
+                        )
+
         st.markdown("#### EARLYシグナル履歴")
         early_history_cols=[c for c in [
             "シグナル日","証券コード","Ticker","銘柄名","株価ソース","初動優先スコア","初動ランク","EARLYスコア",
