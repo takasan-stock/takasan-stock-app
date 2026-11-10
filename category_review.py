@@ -90,7 +90,7 @@ def write_sheet(sh, sheet_name, df):
         ws.update([["該当データなし"]])
         return
 
-    out = df.copy().fillna("").astype(str)
+    out = df.copy().astype(object).where(pd.notna(df), "").astype(str)
     ws.update([out.columns.tolist()] + out.values.tolist())
 
 

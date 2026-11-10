@@ -78,7 +78,8 @@ def write_sheet(sh, sheet_name, df):
         return
 
     out = df.loc[:, ~df.columns.duplicated(keep="first")].copy()
-    out = out.replace([np.inf, -np.inf], np.nan).fillna("").astype(str)
+    out = out.replace([np.inf, -np.inf], np.nan)
+    out = out.astype(object).where(pd.notna(out), "").astype(str)
     ws.update([out.columns.tolist()] + out.values.tolist())
 
 

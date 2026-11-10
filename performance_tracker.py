@@ -133,7 +133,8 @@ def write_sheet(sh, name, df):
         return
 
     out = df.loc[:, ~df.columns.duplicated(keep="first")].copy()
-    out = out.replace([np.inf, -np.inf], np.nan).fillna("").astype(str)
+    out = out.replace([np.inf, -np.inf], np.nan)
+    out = out.astype(object).where(pd.notna(out), "").astype(str)
     _sheets_call(
         f"write({name})",
         lambda: ws.update([out.columns.tolist()] + out.values.tolist()),
