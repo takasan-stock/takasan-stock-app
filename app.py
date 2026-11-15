@@ -76,10 +76,19 @@ def filter_search(df,q):
 
 
 WATCHLIST_SHEET_NAME="ウォッチリスト"
+WATCHLIST_COLUMNS=["証券コード","Ticker","銘柄名","登録日","メモ"]
+
+
+def normalize_watchlist(df: pd.DataFrame) -> pd.DataFrame:
+    out=df.copy() if df is not None else pd.DataFrame()
+    for c in WATCHLIST_COLUMNS:
+        if c not in out.columns:
+            out[c]=""
+    return out[WATCHLIST_COLUMNS].fillna("").astype(str)
 
 
 def save_watchlist(df: pd.DataFrame):
-    """現行ウォッチリストシートへ全体を書き戻す。"""
+    """現行ウォッチリストシートへ全体を書き戻す。メモ列も保持する。"""
     sh=get_gspread_client().open_by_key(st.secrets["SPREADSHEET_ID"])
     try:
         ws=sh.worksheet(WATCHLIST_SHEET_NAME)
@@ -87,13 +96,8 @@ def save_watchlist(df: pd.DataFrame):
     except gspread.WorksheetNotFound:
         ws=sh.add_worksheet(title=WATCHLIST_SHEET_NAME,rows=max(500,len(df)+50),cols=10)
 
-    cols=["証券コード","Ticker","銘柄名","登録日"]
-    out=df.copy() if df is not None else pd.DataFrame()
-    for c in cols:
-        if c not in out.columns:
-            out[c]=""
-    out=out[cols].fillna("").astype(str)
-    ws.update([cols]+out.values.tolist())
+    out=normalize_watchlist(df)
+    ws.update([WATCHLIST_COLUMNS]+out.values.tolist())
     load_sheet.clear()
 
 
@@ -103,14 +107,7 @@ def add_rows_to_watchlist(rows: pd.DataFrame) -> tuple[int,int]:
         return 0,0
 
     import datetime
-    current=load_sheet(WATCHLIST_SHEET_NAME)
-    cols=["証券コード","Ticker","銘柄名","登録日"]
-    if current.empty:
-        current=pd.DataFrame(columns=cols)
-    for c in cols:
-        if c not in current.columns:
-            current[c]=""
-
+    current=normalize_watchlist(load_sheet(WATCHLIST_SHEET_NAME))
     existing=set(current["Ticker"].astype(str).str.strip())
     additions=[]
     skipped=0
@@ -130,14 +127,85 @@ def add_rows_to_watchlist(rows: pd.DataFrame) -> tuple[int,int]:
             "Ticker":ticker,
             "銘柄名":name,
             "登録日":today,
+            "メモ":"",
         })
         existing.add(ticker)
 
     if additions:
-        current=pd.concat([current[cols],pd.DataFrame(additions)],ignore_index=True)
+        current=pd.concat([current,pd.DataFrame(additions)],ignore_index=True)
         save_watchlist(current)
 
     return len(additions),skipped
+
+
+def render_watchlist_quick_add(df: pd.DataFrame, key: str, title: str = "⭐ ウォッチリストへ追加"):
+    """任意の候補表からウォッチリストへ1銘柄追加する共通UI。"""
+    if df is None or df.empty or "Ticker" not in df.columns:
+        return
+
+    source=df.loc[:,~df.columns.duplicated(keep="first")].copy().reset_index(drop=True)
+    source=source[source["Ticker"].astype(str).str.strip().ne("")].reset_index(drop=True)
+    if source.empty:
+        return
+
+    labels=[]
+    for _,row in source.iterrows():
+        code=str(row.get("証券コード","")).strip()
+        name=str(row.get("銘柄名","")).strip()
+        ticker=str(row.get("Ticker","")).strip()
+        labels.append(f"{code}  {name or ticker}")
+
+    with st.expander(title,expanded=False):
+        c1,c2=st.columns([3.0,1.0])
+        with c1:
+            label=st.selectbox(
+                "追加する銘柄",
+                labels,
+                key=f"watch_select_{key}",
+                label_visibility="collapsed",
+            )
+        idx=labels.index(label)
+        with c2:
+            if st.button("⭐ 追加",key=f"watch_add_{key}",use_container_width=True):
+                added,skipped=add_rows_to_watchlist(source.iloc[[idx]])
+                if added:
+                    st.success("ウォッチリストに追加しました。")
+                elif skipped:
+                    st.info("すでにウォッチリストに入っています。")
+
+
+def early_ideal_mask(df: pd.DataFrame) -> pd.Series:
+    """EARLYの理想本命条件。RRは3以上、損切りは3〜5%。"""
+    if df is None or df.empty:
+        return pd.Series(False,index=getattr(df,"index",pd.Index([])))
+
+    rank=df.get("初動ランク",pd.Series("",index=df.index)).astype(str)
+    stage=df.get("長期ステージ",pd.Series("",index=df.index)).astype(str)
+    rr=pd.to_numeric(df.get("RR目安",pd.Series(np.nan,index=df.index)),errors="coerce")
+    stop=pd.to_numeric(df.get("実戦想定損切り距離%",pd.Series(np.nan,index=df.index)),errors="coerce")
+    reversal=df.get("反転確認",pd.Series("",index=df.index)).astype(str)
+    stable=df.get("反転定着",pd.Series("",index=df.index)).astype(str)
+    shape=df.get("EARLY形状判定",pd.Series("",index=df.index)).astype(str)
+
+    return (
+        rank.eq("S")
+        & stage.eq("EARLY_STAGE_OK")
+        & rr.ge(3.0)
+        & stop.between(3.0,5.0,inclusive="both")
+        & reversal.eq("✅反転確認")
+        & stable.eq("✅定着確認")
+        & shape.eq("✅EARLY適合")
+    )
+
+
+def style_early_top20(df: pd.DataFrame):
+    """理想本命を行全体で強調する。"""
+    mask=early_ideal_mask(df)
+    def _row_style(row):
+        if bool(mask.loc[row.name]):
+            return ["background-color: rgba(46, 160, 67, 0.18); font-weight: 700;"]*len(row)
+        return [""]*len(row)
+    return df.style.apply(_row_style,axis=1)
 
 
 def summarize_early_groups(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
@@ -405,6 +473,7 @@ def render_rank_table(df,category=None,key="rank"):
 
     st.caption(f"該当 {len(df)} 銘柄")
     st.dataframe(display_df,use_container_width=True,height=540,hide_index=True)
+    render_watchlist_quick_add(display_df,key=f"rank_{key}")
     csv=df.to_csv(index=False,encoding="utf-8-sig").encode("utf-8-sig")
     st.download_button("📥 CSVで保存",data=csv,file_name=f"{key}.csv",mime="text/csv",key=f"dl_{key}")
 
@@ -523,7 +592,9 @@ elif section=="🔥 決算モメンタム":
         if "スコア" in out.columns:
             out=out.sort_values("スコア",ascending=False)
         cols=[c for c in ["順位","証券コード","Ticker","銘柄名","スコア","ランク","シグナル","決算日","決算後騰落率%","決算反応出来高倍率","RS風"] if c in out.columns]
-        st.dataframe(out[cols],use_container_width=True,height=540,hide_index=True)
+        earnings_display=out[cols].reset_index(drop=True)
+        st.dataframe(earnings_display,use_container_width=True,height=540,hide_index=True)
+        render_watchlist_quick_add(earnings_display,key="earnings")
 
 elif section=="🔄 底打ち転換":
     st.subheader("🔄 TURNAROUND｜底打ち転換")
@@ -630,7 +701,20 @@ elif section=="🔄 底打ち転換":
                 "前週騰落率%","完成4週騰落率%",
                 "テクニカル損切り距離%","ストップ補正","週足ATR14%"
             ] if c in topn.columns]
-            st.dataframe(topn[topcols].reset_index(drop=True),use_container_width=True,height=360,hide_index=True)
+            top_display=topn[topcols].reset_index(drop=True).copy()
+            ideal_mask=early_ideal_mask(top_display)
+            top_display.insert(
+                5 if len(top_display.columns)>=5 else len(top_display.columns),
+                "理想本命",
+                np.where(ideal_mask,"⭐ 理想本命",""),
+            )
+            st.caption(f"⭐ 理想本命 {int(ideal_mask.sum())} 銘柄 ｜ 条件一致行は強調表示")
+            st.dataframe(
+                style_early_top20(top_display),
+                use_container_width=True,
+                height=360,
+                hide_index=True,
+            )
 
             with st.expander("⭐ TOP20からウォッチリストへ追加",expanded=False):
                 st.caption("候補を選んで1クリックで追加できます。重複銘柄は自動でスキップします。")
@@ -804,7 +888,9 @@ Sランクでも、そのまま買うのではなく以下へ進みます。
                     st.dataframe(excluded_df.head(10)[excols].reset_index(drop=True),use_container_width=True,height=330,hide_index=True)
 
         st.markdown("#### 週足転換H 全候補")
-        st.dataframe(hout[hcols].reset_index(drop=True),use_container_width=True,height=420,hide_index=True)
+        weekly_all_display=hout[hcols].reset_index(drop=True)
+        st.dataframe(weekly_all_display,use_container_width=True,height=420,hide_index=True)
+        render_watchlist_quick_add(weekly_all_display,key="weekly_h_all")
 
     st.markdown("#### 🔄 TURNAROUND 総合候補")
     render_rank_table(summary,"TURNAROUND","turnaround")
@@ -821,12 +907,30 @@ elif section=="🚀 ブレイク":
 
 elif section=="⭐ ウォッチリスト":
     st.subheader("⭐ ウォッチリスト")
-    wl=load_sheet("ウォッチリスト")
+    wl=normalize_watchlist(load_sheet("ウォッチリスト"))
     if wl.empty:
-        st.info("ウォッチリストは空です。EARLY TOP20の『⭐ TOP20からウォッチリストへ追加』から簡単に登録できます。")
+        st.info("ウォッチリストは空です。各ランキングや候補表の『⭐ ウォッチリストへ追加』から登録できます。")
     else:
-        st.dataframe(wl,use_container_width=True,height=520,hide_index=True)
-        st.caption("EARLY TOP20から直接追加できます。解除などの詳細操作は『⚙️ A〜G 詳細条件』でも行えます。")
+        st.caption("メモ欄はここで直接編集できます。編集後に『💾 メモを保存』を押してください。")
+        edited_wl=st.data_editor(
+            wl,
+            use_container_width=True,
+            height=520,
+            hide_index=True,
+            disabled=["証券コード","Ticker","銘柄名","登録日"],
+            column_config={
+                "メモ":st.column_config.TextColumn(
+                    "メモ",
+                    help="決算、エントリー条件、気になる価格帯など自由に記録",
+                    width="large",
+                )
+            },
+            key="watchlist_editor",
+        )
+        if st.button("💾 メモを保存",key="watchlist_save_memo",use_container_width=True):
+            save_watchlist(edited_wl)
+            st.success("ウォッチリストのメモを保存しました。")
+        st.caption("各ランキング・EARLY候補・チャートから直接追加できます。解除などの詳細操作は『⚙️ A〜G 詳細条件』でも行えます。")
 
 elif section=="📊 チャート":
     st.subheader("📊 チャート")
@@ -866,6 +970,15 @@ elif section=="📊 チャート":
                     if pd.notna(high_v): cards[1].metric("高値",f"¥{float(high_v):,.0f}")
                     if pd.notna(low_v): cards[2].metric("安値",f"¥{float(low_v):,.0f}")
                     if pd.notna(vol_v): cards[3].metric("出来高",f"{int(float(vol_v)):,}")
+                    render_watchlist_quick_add(
+                        pd.DataFrame([{
+                            "証券コード":row.get("証券コード",""),
+                            "Ticker":ticker,
+                            "銘柄名":row.get("銘柄名",""),
+                        }]),
+                        key="chart_current",
+                        title="⭐ この銘柄をウォッチリストへ追加",
+                    )
                 except Exception as e:
                     st.warning(f"チャート表示だけでエラーが発生しました: {type(e).__name__}")
                     st.caption("ランキング表示には影響ありません。")
