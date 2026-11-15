@@ -1,6 +1,6 @@
-import json, os
+import json, os, sys
 from datetime import date
-from typing import Any
+from pathlib import Path
 
 import gspread
 import pandas as pd
@@ -9,6 +9,16 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google.oauth2.service_account import Credentials
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from early_rules import (
+    early_top20_pool,
+    early_ideal_mask,
+    build_watchlist_promotion_board,
+)
 
 app = FastAPI(title="Takasan Stock Hunter API", version="0.1.0")
 origins = [x.strip() for x in os.getenv("CORS_ORIGINS","*").split(",") if x.strip()]
@@ -81,17 +91,22 @@ def summary():
 
 @app.get("/api/early")
 def early():
-    df = _sheet("週足転換H")
-    if "週足転換タイプ" in df.columns:
-        df = df[df["週足転換タイプ"].astype(str)=="EARLY_TURN"].copy()
-    if "初動優先スコア" in df.columns:
-        df["_score"] = pd.to_numeric(df["初動優先スコア"], errors="coerce")
-        df = df.sort_values("_score", ascending=False, na_position="last").drop(columns="_score")
+    df = early_top20_pool(_sheet("週足転換H"),70,70).head(20).copy()
+    if not df.empty:
+        df["理想本命"] = early_ideal_mask(df).map({True:"⭐ 理想本命",False:""})
     return {"rows": df.to_dict("records")}
 
 @app.get("/api/watchlist")
 def watchlist():
     return {"rows": _watch_df().to_dict("records")}
+
+@app.get("/api/watch-board")
+def watch_board():
+    board = build_watchlist_promotion_board(
+        _watch_df(),
+        _sheet("週足転換H"),
+    )
+    return {"rows": board.to_dict("records")}
 
 @app.post("/api/watchlist")
 def add_watch(item: WatchIn):
