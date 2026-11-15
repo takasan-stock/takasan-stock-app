@@ -16,31 +16,8 @@ const num = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
-function ideal(row) {
-  const rr = num(row["RR目安"]);
-  const stop = num(row["実戦想定損切り距離%"]);
-  return row["初動ランク"] === "S"
-    && row["長期ステージ"] === "EARLY_STAGE_OK"
-    && rr !== null && rr >= 3
-    && stop !== null && stop >= 3 && stop <= 5
-    && row["反転確認"] === "✅反転確認"
-    && row["反転定着"] === "✅定着確認"
-    && row["EARLY形状判定"] === "✅EARLY適合";
-}
-
-function status(row) {
-  if (ideal(row)) return "⭐ 理想本命";
-  const rr = num(row["RR目安"]);
-  const stop = num(row["実戦想定損切り距離%"]);
-  if (["S","A"].includes(row["初動ランク"])
-      && ["EARLY_STAGE_OK","TRANSITION"].includes(row["長期ステージ"])
-      && rr !== null && rr >= 2.5
-      && stop !== null && stop <= 6
-      && row["反転確認"] === "✅反転確認"
-      && row["反転定着"] === "✅定着確認"
-      && row["EARLY形状判定"] === "✅EARLY適合") return "🔥 ENTRY確認";
-  return row["初動ランク"] ? "👀 WATCH" : "⏸ WAIT";
-}
+const ideal = (row) => row["理想本命"] === "⭐ 理想本命"
+  || row["監視ステータス"] === "⭐ 理想本命";
 
 function App() {
   const [page, setPage] = useState("home");
@@ -59,7 +36,7 @@ function App() {
         api("/api/health"),
         api("/api/summary"),
         api("/api/early"),
-        api("/api/watchlist"),
+        api("/api/watch-board"),
       ]);
       setHealth(h); setSummary(s.rows || []); setEarly(e.rows || []); setWatch(w.rows || []);
       if (!selectedTicker && (s.rows || []).length) setSelectedTicker(s.rows[0].Ticker || "");
@@ -75,17 +52,8 @@ function App() {
       .catch(() => setChart([]));
   }, [selectedTicker]);
 
-  const earlyTop = useMemo(() => [...early]
-    .sort((a,b) => (num(b["初動優先スコア"]) || 0) - (num(a["初動優先スコア"]) || 0))
-    .slice(0,20), [early]);
-
-  const watchBoard = useMemo(() => watch.map((w) => {
-    const e = early.find((x) => String(x.Ticker).trim() === String(w.Ticker).trim()) || {};
-    return {...w, ...e, "監視ステータス": status(e)};
-  }).sort((a,b) => {
-    const p = {"⭐ 理想本命":0,"🔥 ENTRY確認":1,"👀 WATCH":2,"⏸ WAIT":3};
-    return (p[a["監視ステータス"]] ?? 9) - (p[b["監視ステータス"]] ?? 9);
-  }), [watch, early]);
+  const earlyTop = useMemo(() => early.slice(0,20), [early]);
+  const watchBoard = useMemo(() => watch, [watch]);
 
   const addWatch = async (row) => {
     await api("/api/watchlist", {
