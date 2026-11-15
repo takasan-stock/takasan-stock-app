@@ -225,6 +225,140 @@ def style_early_top20(df: pd.DataFrame):
     return df.style.apply(_row_style,axis=1)
 
 
+def build_watchlist_promotion_board(
+    watchlist: pd.DataFrame,
+    weekly: pd.DataFrame,
+) -> pd.DataFrame:
+    """ウォッチ銘柄へ最新EARLY状態を横付けし、次アクションを動的判定する。"""
+    base=normalize_watchlist(watchlist)
+    if base.empty:
+        return base
+
+    source=(
+        weekly.loc[:,~weekly.columns.duplicated(keep="first")].copy()
+        if weekly is not None and not weekly.empty
+        else pd.DataFrame()
+    )
+
+    enrich_cols=[
+        "Ticker","初動優先スコア","初動ランク","長期ステージ","RR目安",
+        "実戦想定損切り距離%","反転確認","反転定着","EARLY形状判定",
+        "急落判定","追撃余地","初動鮮度週","20週MA再奪回から週数",
+        "40週MA再奪回から週数",
+    ]
+    available=[c for c in enrich_cols if c in source.columns]
+
+    if "Ticker" in source.columns:
+        source["Ticker"]=source["Ticker"].astype(str).str.strip()
+        if "初動優先スコア" in source.columns:
+            source["初動優先スコア"]=pd.to_numeric(
+                source["初動優先スコア"],errors="coerce"
+            )
+            source=source.sort_values("初動優先スコア",ascending=False,na_position="last")
+        source=source[available].drop_duplicates("Ticker",keep="first")
+        board=base.merge(source,on="Ticker",how="left")
+    else:
+        board=base.copy()
+
+    for c in enrich_cols:
+        if c=="Ticker":
+            continue
+        if c not in board.columns:
+            board[c]=np.nan if c in [
+                "初動優先スコア","RR目安","実戦想定損切り距離%",
+                "初動鮮度週","20週MA再奪回から週数","40週MA再奪回から週数"
+            ] else ""
+
+    for c in [
+        "初動優先スコア","RR目安","実戦想定損切り距離%",
+        "初動鮮度週","20週MA再奪回から週数","40週MA再奪回から週数",
+    ]:
+        board[c]=pd.to_numeric(board[c],errors="coerce")
+
+    ideal=early_ideal_mask(board)
+    rank=board["初動ランク"].fillna("").astype(str)
+    stage=board["長期ステージ"].fillna("").astype(str)
+    rr=board["RR目安"]
+    stop=board["実戦想定損切り距離%"]
+    reversal=board["反転確認"].fillna("").astype(str)
+    stable=board["反転定着"].fillna("").astype(str)
+    shape=board["EARLY形状判定"].fillna("").astype(str)
+
+    data_present=(
+        rank.ne("")
+        | stage.ne("")
+        | rr.notna()
+        | board["初動優先スコア"].notna()
+    )
+    entry_check=(
+        ~ideal
+        & rank.isin(["S","A"])
+        & stage.isin(["EARLY_STAGE_OK","TRANSITION"])
+        & rr.ge(2.5)
+        & stop.le(6.0)
+        & reversal.eq("✅反転確認")
+        & stable.eq("✅定着確認")
+        & shape.eq("✅EARLY適合")
+    )
+    watch=(
+        ~ideal
+        & ~entry_check
+        & data_present
+        & (
+            rank.isin(["S","A","B"])
+            | stage.isin(["EARLY_STAGE_OK","TRANSITION","PULLBACK_BORDER"])
+        )
+    )
+
+    board["監視ステータス"]=np.select(
+        [ideal,entry_check,watch,data_present],
+        ["⭐ 理想本命","🔥 ENTRY確認","👀 WATCH","⏸ WAIT"],
+        default="— データなし",
+    )
+    board["次アクション"]=np.select(
+        [ideal,entry_check,watch,data_present],
+        [
+            "Entry Hunter / Pre-Tradeへ",
+            "Entry Hunterでタイミング確認",
+            "週足・反転条件を継続監視",
+            "条件改善待ち",
+        ],
+        default="週足転換Hデータなし",
+    )
+    priority={
+        "⭐ 理想本命":0,
+        "🔥 ENTRY確認":1,
+        "👀 WATCH":2,
+        "⏸ WAIT":3,
+        "— データなし":4,
+    }
+    board["_priority"]=board["監視ステータス"].map(priority).fillna(9)
+    board=board.sort_values(
+        ["_priority","初動優先スコア","Ticker"],
+        ascending=[True,False,True],
+        na_position="last",
+    ).drop(columns=["_priority"]).reset_index(drop=True)
+    return board
+
+
+def style_watchlist_promotion_board(df: pd.DataFrame):
+    """昇格ステータスごとに行を見分けやすくする。"""
+    def _row_style(row):
+        status=str(row.get("監視ステータス",""))
+        if status=="⭐ 理想本命":
+            style="background-color: rgba(46, 160, 67, 0.18); font-weight: 700;"
+        elif status=="🔥 ENTRY確認":
+            style="background-color: rgba(255, 159, 67, 0.18); font-weight: 700;"
+        elif status=="👀 WATCH":
+            style="background-color: rgba(33, 150, 243, 0.10);"
+        elif status=="⏸ WAIT":
+            style="background-color: rgba(128, 128, 128, 0.08);"
+        else:
+            style=""
+        return [style]*len(row)
+    return df.style.apply(_row_style,axis=1)
+
+
 def summarize_early_groups(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
     """EARLY実績を任意の区分で1/2/4週集計する。"""
     if df is None or df.empty or group_col not in df.columns:
@@ -928,11 +1062,67 @@ elif section=="⭐ ウォッチリスト":
     if wl.empty:
         st.info("ウォッチリストは空です。各ランキングや候補表の『⭐ ウォッチリストへ追加』から登録できます。")
     else:
+        st.markdown("#### 🚦 ウォッチ昇格ボード")
+        st.caption(
+            "最新の週足転換Hを自動照合して、次に見るべき銘柄を優先順位づけします。"
+            " 売買シグナルではなく、Entry Hunter / Pre-Tradeへ進む順番の目安です。"
+        )
+
+        board=build_watchlist_promotion_board(wl,weekly_h_header)
+        status_counts=board["監視ステータス"].value_counts() if not board.empty else pd.Series(dtype=int)
+        bc=st.columns(5)
+        bc[0].metric("⭐ 理想本命",int(status_counts.get("⭐ 理想本命",0)))
+        bc[1].metric("🔥 ENTRY確認",int(status_counts.get("🔥 ENTRY確認",0)))
+        bc[2].metric("👀 WATCH",int(status_counts.get("👀 WATCH",0)))
+        bc[3].metric("⏸ WAIT",int(status_counts.get("⏸ WAIT",0)))
+        bc[4].metric("登録数",len(board))
+
+        status_filter=st.selectbox(
+            "表示ステータス",
+            ["すべて","⭐ 理想本命","🔥 ENTRY確認","👀 WATCH","⏸ WAIT","— データなし"],
+            key="watch_promotion_filter",
+        )
+        board_view=board.copy()
+        if status_filter!="すべて":
+            board_view=board_view[
+                board_view["監視ステータス"].astype(str)==status_filter
+            ].reset_index(drop=True)
+
+        board_cols=[c for c in [
+            "監視ステータス","次アクション",
+            "証券コード","Ticker","銘柄名",
+            "初動優先スコア","初動ランク","長期ステージ",
+            "RR目安","実戦想定損切り距離%",
+            "反転確認","反転定着","EARLY形状判定","急落判定",
+            "追撃余地","初動鮮度週",
+            "20週MA再奪回から週数","40週MA再奪回から週数",
+            "登録日","メモ",
+        ] if c in board_view.columns]
+        st.dataframe(
+            style_watchlist_promotion_board(board_view[board_cols]),
+            use_container_width=True,
+            height=430,
+            hide_index=True,
+        )
+
+        with st.expander("ℹ️ 昇格ステータスの見方",expanded=False):
+            st.markdown("""
+- **⭐ 理想本命**：S + EARLY_STAGE_OK + RR3以上 + 損切り3〜5% + 反転確認 + 反転定着 + EARLY適合
+- **🔥 ENTRY確認**：S/A + EARLY_STAGE_OKまたはTRANSITION + RR2.5以上 + 損切り6%以下 + 反転3条件クリア
+- **👀 WATCH**：ランクや長期ステージは候補圏。まだ条件待ち
+- **⏸ WAIT**：最新データはあるが、現時点では優先条件不足
+- **— データなし**：最新の週足転換Hに一致するデータなし
+
+**⭐ 理想本命 / 🔥 ENTRY確認になったら、Entry Hunter / Pre-Tradeで実際のタイミングを確認**します。
+""")
+
+        st.divider()
+        st.markdown("#### 📝 メモ・ウォッチ管理")
         st.caption("メモ欄はここで直接編集できます。編集後に『💾 メモを保存』を押してください。")
         edited_wl=st.data_editor(
             wl,
             use_container_width=True,
-            height=520,
+            height=360,
             hide_index=True,
             disabled=["証券コード","Ticker","銘柄名","登録日"],
             column_config={
@@ -982,7 +1172,7 @@ elif section=="⭐ ウォッチリスト":
                 st.success(f"{removed} 銘柄をウォッチリストから削除しました。")
                 st.rerun()
 
-        st.caption("追加・メモ・削除をこの画面で完結できます。各ランキング・EARLY候補・チャートから直接追加できます。")
+        st.caption("追加・メモ・削除・昇格確認をこの画面で完結できます。")
 
 elif section=="📊 チャート":
     st.subheader("📊 チャート")
