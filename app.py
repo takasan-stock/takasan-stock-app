@@ -561,6 +561,97 @@ elif section=="🔄 底打ち転換":
             ] if c in topn.columns]
             st.dataframe(topn[topcols].reset_index(drop=True),use_container_width=True,height=360,hide_index=True)
 
+            with st.expander("📘 EARLY TOP20 狙い方・チェック手順",expanded=False):
+                st.markdown("""
+**この表の役割は「買う銘柄を決める」ことではなく、今日チャートを見る順番を決めることです。**
+
+### ① まずSランクから見る
+- **S：初動優先スコア 85以上** → 最優先
+- A：78〜84 → 次点
+- B：70〜77 → 監視
+
+Sランクでも、そのまま買うのではなく以下へ進みます。
+
+### ② 長期ステージを確認
+優先順位は基本的に、
+
+**🌱 EARLY_STAGE_OK → 🔄 TRANSITION → △ PULLBACK_BORDER**
+
+です。
+
+- **EARLY_STAGE_OK**：本命。底打ち初動の狙いに最も近い
+- **TRANSITION**：移行途中。RRと損切りが良ければ十分狙える
+- **PULLBACK_BORDER**：既存上昇の押し目要素が強め。EARLYとしては一段下
+
+**STRONG_PULLBACK / STAGE4_WAIT / 長期ハード除外あり** はEARLY本命から外します。
+
+### ③ RRと損切り距離を見る
+目安は、
+
+- **RR 5以上：かなり魅力的**
+- **RR 3〜5：本命候補**
+- RR 2〜3：条件次第
+- RR 2未満：除外
+
+損切り距離は、
+
+- **3〜5%：理想**
+- 5〜7%：許容
+- 7〜7.5%：境界
+- 7.5%超：除外
+
+👉 **S × EARLY_STAGE_OK × RR3以上 × 損切り5%以下** は最優先でチャート確認。
+
+### ④ 反転の質を確認
+次が揃っているか見ます。
+
+- 急落ダメージなし
+- ✅反転確認
+- ✅定着確認
+- ✅EARLY適合
+- 下降継続ではない
+- 高値圏の押し目再始動ではない
+
+### ⑤ MA再奪回の鮮度を見る
+20週 / 40週MA再奪回は、
+
+- 0〜2週：非常に新鮮
+- 3〜4週：良好
+- 5〜8週：許容
+- 8週超 / 未奪回：見送り寄り
+
+### ⑥ 最後にチャート → Entry Hunter
+週足で形を目視確認してから、
+
+**Entry Hunter / Pre-Trade**
+
+で実際のエントリータイミングを確認します。
+
+---
+
+### 🎯 理想形
+**Sランク**
+＋ **EARLY_STAGE_OK**
+＋ **RR 3〜5以上**
+＋ **損切り3〜5%**
+＋ **反転確認**
+＋ **反転定着**
+＋ **EARLY適合**
+
+この条件が重なる銘柄から順に見るのが基本です。
+
+### 🚫 ランクが高くても見送る代表例
+- 急落ダメージ
+- 反転未確認
+- Stage4強
+- STRONG_PULLBACK
+- 下降継続
+- RR不足
+- 損切り幅が広すぎる
+
+**TOP20 = 銘柄選定、Entry Hunter = タイミング確認** と役割を分けて使います。
+""")
+
         if not early_audit.empty:
             st.markdown("#### 🔎 EARLY分類・除外診断")
             stage_series=early_audit.get("長期ステージ",pd.Series("",index=early_audit.index)).astype(str)
