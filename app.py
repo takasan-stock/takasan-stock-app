@@ -4,6 +4,12 @@ import numpy as np
 import yfinance as yf
 import gspread
 from google.oauth2.service_account import Credentials
+from early_rules import (
+    early_top20_audit as shared_early_top20_audit,
+    early_top20_pool as shared_early_top20_pool,
+    early_ideal_mask as shared_early_ideal_mask,
+    build_watchlist_promotion_board as shared_build_watchlist_promotion_board,
+)
 
 EXPECTED_SCORE_VERSION="v5-actionability"
 
@@ -541,6 +547,14 @@ def early_top20_pool(df: pd.DataFrame, min_score: float = 70.0, min_priority: fl
     if audit.empty or "TOP20判定" not in audit.columns:
         return pd.DataFrame()
     return audit[audit["TOP20判定"]=="✅通過"].reset_index(drop=True)
+
+
+# EARLY判定の正は early_rules.py。
+# 既存UI関数名は維持しつつ、実処理を共通ルールへ接続する。
+early_top20_audit=shared_early_top20_audit
+early_top20_pool=shared_early_top20_pool
+early_ideal_mask=shared_early_ideal_mask
+build_watchlist_promotion_board=shared_build_watchlist_promotion_board
 
 
 def render_rank_table(df,category=None,key="rank"):
