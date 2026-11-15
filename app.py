@@ -75,6 +75,71 @@ def filter_search(df,q):
     return df[mask]
 
 
+WATCHLIST_SHEET_NAME="ウォッチリスト"
+
+
+def save_watchlist(df: pd.DataFrame):
+    """現行ウォッチリストシートへ全体を書き戻す。"""
+    sh=get_gspread_client().open_by_key(st.secrets["SPREADSHEET_ID"])
+    try:
+        ws=sh.worksheet(WATCHLIST_SHEET_NAME)
+        ws.clear()
+    except gspread.WorksheetNotFound:
+        ws=sh.add_worksheet(title=WATCHLIST_SHEET_NAME,rows=max(500,len(df)+50),cols=10)
+
+    cols=["証券コード","Ticker","銘柄名","登録日"]
+    out=df.copy() if df is not None else pd.DataFrame()
+    for c in cols:
+        if c not in out.columns:
+            out[c]=""
+    out=out[cols].fillna("").astype(str)
+    ws.update([cols]+out.values.tolist())
+    load_sheet.clear()
+
+
+def add_rows_to_watchlist(rows: pd.DataFrame) -> tuple[int,int]:
+    """候補行をウォッチへ追加。戻り値=(追加件数, 重複スキップ件数)。"""
+    if rows is None or rows.empty:
+        return 0,0
+
+    import datetime
+    current=load_sheet(WATCHLIST_SHEET_NAME)
+    cols=["証券コード","Ticker","銘柄名","登録日"]
+    if current.empty:
+        current=pd.DataFrame(columns=cols)
+    for c in cols:
+        if c not in current.columns:
+            current[c]=""
+
+    existing=set(current["Ticker"].astype(str).str.strip())
+    additions=[]
+    skipped=0
+    today=datetime.date.today().strftime("%Y-%m-%d")
+
+    for _,row in rows.iterrows():
+        ticker=str(row.get("Ticker","")).strip()
+        code=str(row.get("証券コード","")).strip()
+        name=str(row.get("銘柄名","")).strip()
+        if not ticker:
+            continue
+        if ticker in existing:
+            skipped+=1
+            continue
+        additions.append({
+            "証券コード":code,
+            "Ticker":ticker,
+            "銘柄名":name,
+            "登録日":today,
+        })
+        existing.add(ticker)
+
+    if additions:
+        current=pd.concat([current[cols],pd.DataFrame(additions)],ignore_index=True)
+        save_watchlist(current)
+
+    return len(additions),skipped
+
+
 def summarize_early_groups(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
     """EARLY実績を任意の区分で1/2/4週集計する。"""
     if df is None or df.empty or group_col not in df.columns:
@@ -567,6 +632,48 @@ elif section=="🔄 底打ち転換":
             ] if c in topn.columns]
             st.dataframe(topn[topcols].reset_index(drop=True),use_container_width=True,height=360,hide_index=True)
 
+            with st.expander("⭐ TOP20からウォッチリストへ追加",expanded=False):
+                st.caption("候補を選んで1クリックで追加できます。重複銘柄は自動でスキップします。")
+                labels=[]
+                for i,row in topn.reset_index(drop=True).iterrows():
+                    labels.append(
+                        f"{row.get('証券コード','')}  {row.get('銘柄名','')}  "
+                        f"[{row.get('初動ランク','-')} / RR {row.get('RR目安','-')}]"
+                    )
+
+                if labels:
+                    wc1,wc2,wc3=st.columns([2.4,1.0,1.2])
+                    with wc1:
+                        selected_watch_label=st.selectbox(
+                            "追加する銘柄",
+                            labels,
+                            key="early_watch_select",
+                            label_visibility="collapsed",
+                        )
+                    selected_watch_idx=labels.index(selected_watch_label)
+                    with wc2:
+                        if st.button("⭐ 1銘柄追加",key="early_watch_add_one",use_container_width=True):
+                            added,skipped=add_rows_to_watchlist(
+                                topn.reset_index(drop=True).iloc[[selected_watch_idx]]
+                            )
+                            if added:
+                                st.success("ウォッチリストに追加しました。")
+                            elif skipped:
+                                st.info("この銘柄はすでにウォッチリストに入っています。")
+                    with wc3:
+                        s_rows=topn[topn.get("初動ランク",pd.Series("",index=topn.index)).astype(str)=="S"]
+                        if st.button(
+                            f"⭐ Sランク一括 ({len(s_rows)})",
+                            key="early_watch_add_s",
+                            use_container_width=True,
+                            disabled=s_rows.empty,
+                        ):
+                            added,skipped=add_rows_to_watchlist(s_rows)
+                            st.success(f"Sランクを {added} 銘柄追加しました。重複スキップ {skipped} 銘柄。")
+
+                current_wl=load_sheet(WATCHLIST_SHEET_NAME)
+                st.caption(f"現在のウォッチリスト: {len(current_wl)} 銘柄")
+
             with st.expander("📘 EARLY TOP20 狙い方・チェック手順",expanded=False):
                 st.markdown("""
 **この表の役割は「買う銘柄を決める」ことではなく、今日チャートを見る順番を決めることです。**
@@ -716,10 +823,10 @@ elif section=="⭐ ウォッチリスト":
     st.subheader("⭐ ウォッチリスト")
     wl=load_sheet("ウォッチリスト")
     if wl.empty:
-        st.info("ウォッチリストは空です。A〜G詳細画面から登録できます。")
+        st.info("ウォッチリストは空です。EARLY TOP20の『⭐ TOP20からウォッチリストへ追加』から簡単に登録できます。")
     else:
         st.dataframe(wl,use_container_width=True,height=520,hide_index=True)
-        st.caption("登録・解除は『⚙️ A〜G 詳細条件』画面で行えます。")
+        st.caption("EARLY TOP20から直接追加できます。解除などの詳細操作は『⚙️ A〜G 詳細条件』でも行えます。")
 
 elif section=="📊 チャート":
     st.subheader("📊 チャート")
