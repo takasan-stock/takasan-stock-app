@@ -138,6 +138,23 @@ def add_rows_to_watchlist(rows: pd.DataFrame) -> tuple[int,int]:
     return len(additions),skipped
 
 
+def remove_watchlist_tickers(df: pd.DataFrame, tickers: list[str]) -> int:
+    """指定Tickerを削除し、残りのメモも含めて保存する。"""
+    current=normalize_watchlist(df)
+    targets={str(t).strip() for t in tickers if str(t).strip()}
+    if not targets:
+        return 0
+
+    before=len(current)
+    current=current[
+        ~current["Ticker"].astype(str).str.strip().isin(targets)
+    ].reset_index(drop=True)
+    removed=before-len(current)
+    if removed:
+        save_watchlist(current)
+    return removed
+
+
 def render_watchlist_quick_add(df: pd.DataFrame, key: str, title: str = "⭐ ウォッチリストへ追加"):
     """任意の候補表からウォッチリストへ1銘柄追加する共通UI。"""
     if df is None or df.empty or "Ticker" not in df.columns:
@@ -927,10 +944,45 @@ elif section=="⭐ ウォッチリスト":
             },
             key="watchlist_editor",
         )
-        if st.button("💾 メモを保存",key="watchlist_save_memo",use_container_width=True):
-            save_watchlist(edited_wl)
-            st.success("ウォッチリストのメモを保存しました。")
-        st.caption("各ランキング・EARLY候補・チャートから直接追加できます。解除などの詳細操作は『⚙️ A〜G 詳細条件』でも行えます。")
+        action1,action2=st.columns([1.0,1.4])
+        with action1:
+            if st.button("💾 メモを保存",key="watchlist_save_memo",use_container_width=True):
+                save_watchlist(edited_wl)
+                st.success("ウォッチリストのメモを保存しました。")
+
+        delete_labels=[
+            f"{row.get('証券コード','')}  {row.get('銘柄名','') or row.get('Ticker','')}"
+            for _,row in edited_wl.iterrows()
+        ]
+        label_to_ticker={
+            label:str(edited_wl.iloc[i].get("Ticker","")).strip()
+            for i,label in enumerate(delete_labels)
+        }
+
+        with st.expander("🗑️ ウォッチリストから削除",expanded=False):
+            st.caption("削除したい銘柄を複数選べます。削除時、編集中のメモも残り銘柄へ保存されます。")
+            selected_delete=st.multiselect(
+                "削除する銘柄",
+                delete_labels,
+                key="watchlist_delete_select",
+                placeholder="削除する銘柄を選択",
+            )
+            delete_tickers=[
+                label_to_ticker[label]
+                for label in selected_delete
+                if label_to_ticker.get(label)
+            ]
+            if st.button(
+                f"🗑️ 選択した {len(delete_tickers)} 銘柄を削除",
+                key="watchlist_delete_button",
+                use_container_width=True,
+                disabled=not delete_tickers,
+            ):
+                removed=remove_watchlist_tickers(edited_wl,delete_tickers)
+                st.success(f"{removed} 銘柄をウォッチリストから削除しました。")
+                st.rerun()
+
+        st.caption("追加・メモ・削除をこの画面で完結できます。各ランキング・EARLY候補・チャートから直接追加できます。")
 
 elif section=="📊 チャート":
     st.subheader("📊 チャート")
