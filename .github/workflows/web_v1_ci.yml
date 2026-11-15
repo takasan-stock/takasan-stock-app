@@ -1,0 +1,76 @@
+name: Independent Web v1 CI
+
+on:
+  pull_request:
+    paths:
+      - "web/**"
+      - "web_api/**"
+      - "early_rules.py"
+      - "app.py"
+      - "render.yaml"
+      - ".github/workflows/web_v1_ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web-v1:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install rule-test dependencies
+        run: pip install pandas numpy
+
+      - name: Compile Python
+        run: python -m py_compile early_rules.py web_api/main.py app.py
+
+      - name: Test shared EARLY rules
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          from early_rules import early_top20_pool, early_ideal_mask, build_watchlist_promotion_board
+
+          row = {
+              "証券コード":"9999","Ticker":"9999.T","銘柄名":"TEST",
+              "週足転換タイプ":"EARLY_TURN","週足転換スコア":85,
+              "初動優先スコア":90,"初動ランク":"S","EARLYスコア":88,
+              "急落判定":"✅通常","反転確認":"✅反転確認","反転定着":"✅定着確認",
+              "EARLY形状判定":"✅EARLY適合","押し目再始動判定":"—","下降継続判定":"—",
+              "長期ステージ":"EARLY_STAGE_OK","長期ハード除外":"✅なし",
+              "長期Stage4点":0,"長期押し目点":0,"完成4週騰落率%":4,
+              "20週MA再奪回から週数":2,"40週MA再奪回から週数":3,
+              "RR目安":4.2,"実戦想定損切り距離%":4.0,
+          }
+          weekly = pd.DataFrame([row])
+          top = early_top20_pool(weekly)
+          assert len(top) == 1
+          assert bool(early_ideal_mask(top).iloc[0])
+
+          watch = pd.DataFrame([{
+              "証券コード":"9999","Ticker":"9999.T","銘柄名":"TEST",
+              "登録日":"2026-11-16","メモ":"確認"
+          }])
+          board = build_watchlist_promotion_board(watch, weekly)
+          assert board.iloc[0]["監視ステータス"] == "⭐ 理想本命"
+          assert board.iloc[0]["次アクション"] == "Entry Hunter / Pre-Tradeへ"
+          print("shared EARLY rules: OK")
+          PY
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Build React web
+        working-directory: web
+        run: |
+          npm install
+          npm run build
