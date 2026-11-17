@@ -68,6 +68,16 @@ def _watch_df():
         if c not in df.columns: df[c] = ""
     return df[WATCH_COLS].fillna("").astype(str)
 
+def _records(df: pd.DataFrame):
+    """DataFrameをJSON安全なrecordsへ変換する。NaN/NaT/infはnullへ。"""
+    if df is None or df.empty:
+        return []
+    safe = df.copy()
+    numeric_cols = safe.select_dtypes(include=["number"]).columns
+    if len(numeric_cols):
+        safe[numeric_cols] = safe[numeric_cols].replace([float("inf"), float("-inf")], pd.NA)
+    return json.loads(safe.to_json(orient="records", force_ascii=False, date_format="iso"))
+
 def _save_watch(df: pd.DataFrame):
     sh = _client().open_by_key(SHEET_ID)
     try:
@@ -87,18 +97,18 @@ def health():
 
 @app.get("/api/summary")
 def summary():
-    return {"rows": _sheet("4系統サマリー").to_dict("records")}
+    return {"rows": _records(_sheet("4系統サマリー"))}
 
 @app.get("/api/early")
 def early():
     df = early_top20_pool(_sheet("週足転換H"),70,70).head(20).copy()
     if not df.empty:
         df["理想本命"] = early_ideal_mask(df).map({True:"⭐ 理想本命",False:""})
-    return {"rows": df.to_dict("records")}
+    return {"rows": _records(df)}
 
 @app.get("/api/watchlist")
 def watchlist():
-    return {"rows": _watch_df().to_dict("records")}
+    return {"rows": _records(_watch_df())}
 
 @app.get("/api/watch-board")
 def watch_board():
@@ -106,7 +116,7 @@ def watch_board():
         _watch_df(),
         _sheet("週足転換H"),
     )
-    return {"rows": board.to_dict("records")}
+    return {"rows": _records(board)}
 
 @app.post("/api/watchlist")
 def add_watch(item: WatchIn):
