@@ -31,6 +31,13 @@ const isWatched = (row, watchRows = []) => {
   });
 };
 
+const resolveTicker = (row) => {
+  const ticker = String(row?.Ticker || "").trim();
+  if (ticker) return ticker;
+  const code = String(row?.["証券コード"] || "").trim();
+  return code ? `${code}.T` : "";
+};
+
 function App() {
   const [page, setPage] = useState("home");
   const [summary, setSummary] = useState([]);
@@ -42,6 +49,7 @@ function App() {
   const [chart, setChart] = useState([]);
   const [chartInfo, setChartInfo] = useState({source:null, reason:null});
   const [stockContext, setStockContext] = useState({row:{},sources:{summary:false,weekly:false}});
+  const [chartLoading, setChartLoading] = useState(false);
 
   const reload = async () => {
     setLoading(true);
@@ -61,10 +69,16 @@ function App() {
 
   useEffect(() => {
     if (!selectedTicker) return;
+    let active=true;
+    setChartLoading(true);
+    setChart([]);
+    setChartInfo({source:null, reason:null});
+    setStockContext({row:{},sources:{summary:false,weekly:false}});
     Promise.allSettled([
       api(`/api/chart/${encodeURIComponent(selectedTicker)}?period=2y`),
       api(`/api/stock-context/${encodeURIComponent(selectedTicker)}`),
     ]).then(([chartResult,contextResult])=>{
+      if(!active) return;
       if(chartResult.status==="fulfilled"){
         const r=chartResult.value;
         setChart(r.rows || []);
@@ -78,7 +92,10 @@ function App() {
       }else{
         setStockContext({row:{},sources:{summary:false,weekly:false}});
       }
+    }).finally(()=>{
+      if(active) setChartLoading(false);
     });
+    return ()=>{active=false;};
   }, [selectedTicker]);
 
   const earlyTop = useMemo(() => early.slice(0,20), [early]);
@@ -112,7 +129,12 @@ function App() {
   };
 
   const openChart = (row) => {
-    if (row?.Ticker) setSelectedTicker(row.Ticker);
+    const nextTicker=resolveTicker(row);
+    if (nextTicker) {
+      setSelectedTicker(nextTicker);
+      setChart([]);
+      setStockContext({row:{},sources:{summary:false,weekly:false}});
+    }
     setPage("chart");
   };
 
@@ -142,7 +164,7 @@ function App() {
         {page==="early" && <EarlyPage rows={earlyTop} watchBoard={watchBoard} addWatch={addWatch}/>}
         {page==="watch" && <WatchPage rows={watchBoard} saveMemo={saveMemo} removeWatch={removeWatch}/>}
         {page==="ranking" && <RankingPage rows={summary} watchBoard={watchBoard} addWatch={addWatch}/>}
-        {page==="chart" && <ChartPage summary={summary} earlyRows={early} stockContext={stockContext} ticker={selectedTicker} setTicker={setSelectedTicker} rows={chart} chartInfo={chartInfo} watchBoard={watchBoard} addWatch={addWatch}/>} 
+        {page==="chart" && <ChartPage summary={summary} earlyRows={early} stockContext={stockContext} ticker={selectedTicker} setTicker={setSelectedTicker} rows={chart} chartInfo={chartInfo} chartLoading={chartLoading} watchBoard={watchBoard} addWatch={addWatch}/>} 
       </>}
     </main>
   </div>;
@@ -553,12 +575,13 @@ function entryAssessment(row, chartRows, timeframe){
   return {status,passed,failed,available:availableChecks.length,total:checks.length,unknown,checks,fast,slow,close};
 }
 
-function ChartPage({summary,earlyRows,stockContext,ticker,setTicker,rows,chartInfo,watchBoard,addWatch}){
+function ChartPage({summary,earlyRows,stockContext,ticker,setTicker,rows,chartInfo,chartLoading,watchBoard,addWatch}){
   const [timeframe,setTimeframe]=useState("daily");
   const weeklyRows=useMemo(()=>aggregateWeekly(rows),[rows]);
   const chartRows=timeframe==="weekly"?weeklyRows:rows;
   const visibleRows=timeframe==="weekly"?chartRows.slice(-60):chartRows.slice(-130);
-  const baseTarget=summary.find(r=>r.Ticker===ticker) || {};
+  const tickerCode=String(ticker||"").split(".")[0];
+  const baseTarget=summary.find(r=>r.Ticker===ticker || String(r["証券コード"]||"")===tickerCode) || {};
   const earlyTarget=earlyRows.find(r=>r.Ticker===ticker || String(r["証券コード"]||"")===String(baseTarget["証券コード"]||"")) || {};
   const watchTarget=watchBoard.find(r=>r.Ticker===ticker || String(r["証券コード"]||"")===String(baseTarget["証券コード"]||"")) || {};
   const target={...baseTarget,...(stockContext?.row||{}),...earlyTarget,...watchTarget};
@@ -585,7 +608,13 @@ function ChartPage({summary,earlyRows,stockContext,ticker,setTicker,rows,chartIn
   const watchIndex=watchBoard.findIndex(r=>r.Ticker===ticker || String(r["証券コード"]||"")===String(target["証券コード"]||""));
   const prevWatch=(watchIndex>=0 && watchBoard.length>1)?watchBoard[(watchIndex-1+watchBoard.length)%watchBoard.length]:null;
   const nextWatch=(watchIndex>=0 && watchBoard.length>1)?watchBoard[(watchIndex+1)%watchBoard.length]:null;
-  const jumpWatch=(row)=>{ if(row?.Ticker) setTicker(row.Ticker); };
+  const jumpWatch=(row)=>{ const t=resolveTicker(row); if(t) setTicker(t); };
+  const selectRows=summary.slice(0,200);
+  const selectedInList=selectRows.some(r=>resolveTicker(r)===ticker);
+  const selectOptions=selectedInList ? selectRows : [target,...selectRows].filter((r,i,a)=>{
+    const t=resolveTicker(r);
+    return t && a.findIndex(x=>resolveTicker(x)===t)===i;
+  });
   return <>
     <section className="chartHero">
       <div>
@@ -675,7 +704,10 @@ function ChartPage({summary,earlyRows,stockContext,ticker,setTicker,rows,chartIn
           <button className={timeframe==="weekly"?"active":""} onClick={()=>setTimeframe("weekly")}>週足</button>
         </div>
         <select value={ticker} onChange={e=>setTicker(e.target.value)}>
-          {summary.slice(0,200).map(r=><option key={r.Ticker} value={r.Ticker}>{r["証券コード"]} {r["銘柄名"]}</option>)}
+          {selectOptions.map((r,i)=>{
+            const t=resolveTicker(r);
+            return <option key={t||i} value={t}>{r["証券コード"]||String(t).split(".")[0]} {r["銘柄名"]||""}</option>;
+          })}
         </select>
         <button className={`mini watchTextButton ${watched ? "watched" : ""}`} onClick={()=>!watched && addWatch(target)} disabled={watched}>
           <Star size={16} fill={watched ? "currentColor" : "none"}/>{watched ? "WATCHLIST登録済み" : "ウォッチ追加"}
@@ -689,7 +721,13 @@ function ChartPage({summary,earlyRows,stockContext,ticker,setTicker,rows,chartIn
           : <span><i className="legendMa40"></i>MA40</span>}
         <span className="chartSource">DATA: {chartInfo?.source || "—"}</span>
       </div>
-      <div className="chartBox proChart">{chartRows.length?<FinancialChart rows={chartRows} timeframe={timeframe}/>:<div className="chartEmpty"><b>チャートデータなし</b><small>{chartInfo?.reason || "株価データを取得できませんでした"}</small></div>}</div>
+      <div className="chartBox proChart">
+        {chartLoading
+          ? <div className="chartLoading"><span></span><b>{tickerCode} のチャートを読み込み中...</b></div>
+          : chartRows.length
+            ? <FinancialChart rows={chartRows} timeframe={timeframe}/>
+            : <div className="chartEmpty"><b>チャートデータなし</b><small>{chartInfo?.reason || "株価データを取得できませんでした"}</small></div>}
+      </div>
     </Panel>
   </>
 }
