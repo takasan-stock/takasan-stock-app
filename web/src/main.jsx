@@ -131,7 +131,7 @@ function App() {
         {page==="early" && <EarlyPage rows={earlyTop} watchBoard={watchBoard} addWatch={addWatch}/>}
         {page==="watch" && <WatchPage rows={watchBoard} saveMemo={saveMemo} removeWatch={removeWatch}/>}
         {page==="ranking" && <RankingPage rows={summary} watchBoard={watchBoard} addWatch={addWatch}/>}
-        {page==="chart" && <ChartPage summary={summary} ticker={selectedTicker} setTicker={setSelectedTicker} rows={chart} chartInfo={chartInfo} watchBoard={watchBoard} addWatch={addWatch}/>} 
+        {page==="chart" && <ChartPage summary={summary} earlyRows={early} ticker={selectedTicker} setTicker={setSelectedTicker} rows={chart} chartInfo={chartInfo} watchBoard={watchBoard} addWatch={addWatch}/>} 
       </>}
     </main>
   </div>;
@@ -426,8 +426,48 @@ function FinancialChart({rows}){
   return <div ref={hostRef} className="financialChart"/>;
 }
 
-function ChartPage({summary,ticker,setTicker,rows,chartInfo,watchBoard,addWatch}){
-  const target=summary.find(r=>r.Ticker===ticker) || {};
+
+function lastSma(rows, period){
+  const vals=rows.slice(-period).map(r=>num(r.Close)).filter(v=>v!==null);
+  if(vals.length<period) return null;
+  return vals.reduce((a,b)=>a+b,0)/period;
+}
+
+function entryAssessment(row, chartRows){
+  const rank=String(row?.["初動ランク"]||"");
+  const stage=String(row?.["長期ステージ"]||"");
+  const rr=num(row?.["RR目安"]);
+  const stop=num(row?.["実戦想定損切り距離%"]);
+  const reversal=String(row?.["反転確認"]||"");
+  const settle=String(row?.["反転定着"]||"");
+  const shape=String(row?.["EARLY形状判定"]||"");
+  const close=num(chartRows?.[chartRows.length-1]?.Close);
+  const ma20=lastSma(chartRows||[],20);
+  const ma60=lastSma(chartRows||[],60);
+
+  const checks=[
+    {label:"初動ランク",pass:["S","A"].includes(rank),value:rank||"—",hint:"S / A"},
+    {label:"長期ステージ",pass:stage==="EARLY_STAGE_OK",value:stage||"—",hint:"EARLY_STAGE_OK"},
+    {label:"RR",pass:rr!==null && rr>=3,value:rr!==null?rr.toFixed(2):"—",hint:"3.0以上"},
+    {label:"損切り距離",pass:stop!==null && stop<=5,value:stop!==null?`${stop.toFixed(1)}%`:"—",hint:"5%以内"},
+    {label:"反転",pass:reversal.includes("確認"),value:reversal||"—",hint:"反転確認"},
+    {label:"定着",pass:settle.includes("確認"),value:settle||"—",hint:"定着確認"},
+    {label:"形状",pass:shape.includes("適合"),value:shape||"—",hint:"EARLY適合"},
+    {label:"価格 / MA20",pass:close!==null && ma20!==null && close>=ma20,value:(close!==null&&ma20!==null)?`${((close/ma20-1)*100).toFixed(1)}%`:"—",hint:"終値がMA20以上"},
+    {label:"MA20 / MA60",pass:ma20!==null && ma60!==null && ma20>=ma60,value:(ma20!==null&&ma60!==null)?(ma20>=ma60?"上向き":"下向き"):"—",hint:"MA20≧MA60"},
+  ];
+
+  const passed=checks.filter(c=>c.pass).length;
+  const corePassed=checks.slice(0,7).filter(c=>c.pass).length;
+  const status=(corePassed===7 && passed>=8)?"READY":(corePassed>=5 && passed>=6)?"PREP":"WAIT";
+  return {status,passed,total:checks.length,checks,ma20,ma60,close};
+}
+
+function ChartPage({summary,earlyRows,ticker,setTicker,rows,chartInfo,watchBoard,addWatch}){
+  const baseTarget=summary.find(r=>r.Ticker===ticker) || {};
+  const earlyTarget=earlyRows.find(r=>r.Ticker===ticker || String(r["証券コード"]||"")===String(baseTarget["証券コード"]||"")) || {};
+  const watchTarget=watchBoard.find(r=>r.Ticker===ticker || String(r["証券コード"]||"")===String(baseTarget["証券コード"]||"")) || {};
+  const target={...baseTarget,...earlyTarget,...watchTarget};
   const watched=isWatched(target, watchBoard);
   const ys=rows.map(r=>num(r.Close)).filter(v=>v!==null);
   const min=ys.length?Math.min(...ys):null, max=ys.length?Math.max(...ys):null;
@@ -435,6 +475,7 @@ function ChartPage({summary,ticker,setTicker,rows,chartInfo,watchBoard,addWatch}
   const latest=rows.length?rows[rows.length-1]:null;
   const prev=rows.length>1?num(rows[rows.length-2]?.Close):null;
   const change=(last!==null && prev!==null && prev!==0)?((last-prev)/prev)*100:null;
+  const assessment=entryAssessment(target,rows);
   return <>
     <section className="chartHero">
       <div>
@@ -455,6 +496,36 @@ function ChartPage({summary,ticker,setTicker,rows,chartInfo,watchBoard,addWatch}
         </small>
       </div>
     </section>
+
+    <section className={`entryCheckPanel entry-${assessment.status.toLowerCase()}`}>
+      <div className="entryCheckHead">
+        <div>
+          <span className="eyebrow">ENTRY CHECK / 補助判定</span>
+          <h2>購入前チェック</h2>
+          <p>既存のEARLY条件とチャート位置をまとめた最終確認。Entry Hunter本体の判定は変更しません。</p>
+        </div>
+        <div className="entryStatus">
+          <span className={`entryStatusBadge ${assessment.status.toLowerCase()}`}>{assessment.status}</span>
+          <strong>{assessment.passed}<small> / {assessment.total}</small></strong>
+        </div>
+      </div>
+      <div className="entryCheckGrid">
+        {assessment.checks.map((c,i)=><div className={`entryCheckItem ${c.pass?"pass":"fail"}`} key={i}>
+          <span className="entryCheckIcon">{c.pass?"✓":"!"}</span>
+          <div>
+            <b>{c.label}</b>
+            <strong>{c.value}</strong>
+            <small>{c.hint}</small>
+          </div>
+        </div>)}
+      </div>
+      <div className="entryCheckFoot">
+        <span>MA20 {assessment.ma20!==null?assessment.ma20.toLocaleString(undefined,{maximumFractionDigits:1}):"—"}</span>
+        <span>MA60 {assessment.ma60!==null?assessment.ma60.toLocaleString(undefined,{maximumFractionDigits:1}):"—"}</span>
+        <span>終値 {assessment.close!==null?assessment.close.toLocaleString(undefined,{maximumFractionDigits:1}):"—"}</span>
+      </div>
+    </section>
+
     <Panel title="チャート">
       <div className="chartControls"><select value={ticker} onChange={e=>setTicker(e.target.value)}>
         {summary.slice(0,200).map(r=><option key={r.Ticker} value={r.Ticker}>{r["証券コード"]} {r["銘柄名"]}</option>)}
