@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Activity, BarChart3, Home, Radar, RefreshCw, Star, Trash2 } from "lucide-react";
+import { CandlestickSeries, ColorType, HistogramSeries, LineSeries, createChart } from "lightweight-charts";
 import "./styles.css";
 
 const API = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
@@ -38,6 +39,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [selectedTicker, setSelectedTicker] = useState("");
   const [chart, setChart] = useState([]);
+  const [chartInfo, setChartInfo] = useState({source:null, reason:null});
 
   const reload = async () => {
     setLoading(true);
@@ -58,8 +60,14 @@ function App() {
   useEffect(() => {
     if (!selectedTicker) return;
     api(`/api/chart/${encodeURIComponent(selectedTicker)}?period=6mo`)
-      .then((r) => setChart(r.rows || []))
-      .catch(() => setChart([]));
+      .then((r) => {
+        setChart(r.rows || []);
+        setChartInfo({source:r.source || null, reason:r.unavailable_reason || null});
+      })
+      .catch((e) => {
+        setChart([]);
+        setChartInfo({source:null, reason:String(e?.message || "chart fetch failed")});
+      });
   }, [selectedTicker]);
 
   const earlyTop = useMemo(() => early.slice(0,20), [early]);
@@ -123,7 +131,7 @@ function App() {
         {page==="early" && <EarlyPage rows={earlyTop} watchBoard={watchBoard} addWatch={addWatch}/>}
         {page==="watch" && <WatchPage rows={watchBoard} saveMemo={saveMemo} removeWatch={removeWatch}/>}
         {page==="ranking" && <RankingPage rows={summary} watchBoard={watchBoard} addWatch={addWatch}/>}
-        {page==="chart" && <ChartPage summary={summary} ticker={selectedTicker} setTicker={setSelectedTicker} rows={chart} watchBoard={watchBoard} addWatch={addWatch}/>}
+        {page==="chart" && <ChartPage summary={summary} ticker={selectedTicker} setTicker={setSelectedTicker} rows={chart} chartInfo={chartInfo} watchBoard={watchBoard} addWatch={addWatch}/>} 
       </>}
     </main>
   </div>;
@@ -310,13 +318,123 @@ function RankingPage({rows,watchBoard,addWatch}) {
   </>
 }
 
-function ChartPage({summary,ticker,setTicker,rows,watchBoard,addWatch}){
+
+function smaData(rows, period){
+  const values=[];
+  let sum=0;
+  return rows.map((r)=>{
+    const v=num(r.Close);
+    values.push(v);
+    if(v!==null) sum+=v;
+    if(values.length>period){
+      const old=values.shift();
+      if(old!==null) sum-=old;
+    }
+    if(values.length<period || values.some(x=>x===null)) return null;
+    return {time:r.Date,value:sum/period};
+  }).filter(Boolean);
+}
+
+function FinancialChart({rows}){
+  const hostRef=useRef(null);
+  useEffect(()=>{
+    const host=hostRef.current;
+    if(!host || !rows.length) return;
+
+    const chart=createChart(host,{
+      width:host.clientWidth,
+      height:host.clientHeight || 500,
+      layout:{
+        background:{type:ColorType.Solid,color:"#fbfdff"},
+        textColor:"#5f778c",
+        attributionLogo:true,
+      },
+      grid:{
+        vertLines:{color:"#edf2f6"},
+        horzLines:{color:"#edf2f6"},
+      },
+      rightPriceScale:{
+        borderColor:"#dbe6ee",
+        scaleMargins:{top:0.08,bottom:0.22},
+      },
+      timeScale:{
+        borderColor:"#dbe6ee",
+        timeVisible:false,
+        secondsVisible:false,
+        rightOffset:3,
+        barSpacing:8,
+        minBarSpacing:3,
+      },
+      crosshair:{
+        vertLine:{color:"#8fb0c8",width:1,style:2},
+        horzLine:{color:"#8fb0c8",width:1,style:2},
+      },
+      handleScroll:true,
+      handleScale:true,
+    });
+
+    const candles=chart.addSeries(CandlestickSeries,{
+      upColor:"#28b779",
+      downColor:"#e35d6a",
+      borderVisible:false,
+      wickUpColor:"#28b779",
+      wickDownColor:"#e35d6a",
+      priceLineVisible:true,
+      lastValueVisible:true,
+    });
+    candles.setData(rows.map(r=>({
+      time:r.Date,
+      open:num(r.Open) ?? num(r.Close),
+      high:num(r.High) ?? num(r.Close),
+      low:num(r.Low) ?? num(r.Close),
+      close:num(r.Close),
+    })).filter(d=>d.close!==null));
+
+    const ma20=chart.addSeries(LineSeries,{
+      color:"#2d80c3",lineWidth:2,priceLineVisible:false,lastValueVisible:false,title:"MA20"
+    });
+    ma20.setData(smaData(rows,20));
+
+    const ma60=chart.addSeries(LineSeries,{
+      color:"#e7a429",lineWidth:2,priceLineVisible:false,lastValueVisible:false,title:"MA60"
+    });
+    ma60.setData(smaData(rows,60));
+
+    const volume=chart.addSeries(HistogramSeries,{
+      priceFormat:{type:"volume"},
+      priceScaleId:"volume",
+      priceLineVisible:false,
+      lastValueVisible:false,
+    });
+    volume.priceScale().applyOptions({scaleMargins:{top:0.82,bottom:0}});
+    volume.setData(rows.map(r=>{
+      const o=num(r.Open), c=num(r.Close), v=num(r.Volume);
+      return {time:r.Date,value:v || 0,color:(c!==null && o!==null && c>=o)?"rgba(40,183,121,.42)":"rgba(227,93,106,.42)"};
+    }));
+
+    chart.timeScale().fitContent();
+
+    const ro=new ResizeObserver(()=>{
+      if(host.clientWidth && host.clientHeight){
+        chart.applyOptions({width:host.clientWidth,height:host.clientHeight});
+      }
+    });
+    ro.observe(host);
+    return ()=>{ro.disconnect();chart.remove();};
+  },[rows]);
+
+  return <div ref={hostRef} className="financialChart"/>;
+}
+
+function ChartPage({summary,ticker,setTicker,rows,chartInfo,watchBoard,addWatch}){
   const target=summary.find(r=>r.Ticker===ticker) || {};
   const watched=isWatched(target, watchBoard);
-  const pts=rows.map((r,i)=>({x:i,y:num(r.Close)})).filter(p=>p.y!==null);
-  const ys=pts.map(p=>p.y); const min=ys.length?Math.min(...ys):null, max=ys.length?Math.max(...ys):null;
+  const ys=rows.map(r=>num(r.Close)).filter(v=>v!==null);
+  const min=ys.length?Math.min(...ys):null, max=ys.length?Math.max(...ys):null;
   const last=ys.length?ys[ys.length-1]:null;
-  const poly=pts.map(p=>`${(p.x/Math.max(pts.length-1,1))*100},${95-((p.y-min)/Math.max((max-min),1))*85}`).join(" ");
+  const latest=rows.length?rows[rows.length-1]:null;
+  const prev=rows.length>1?num(rows[rows.length-2]?.Close):null;
+  const change=(last!==null && prev!==null && prev!==0)?((last-prev)/prev)*100:null;
   return <>
     <section className="chartHero">
       <div>
@@ -329,9 +447,12 @@ function ChartPage({summary,ticker,setTicker,rows,watchBoard,addWatch}){
         </div>
       </div>
       <div className="chartPrice">
-        <span>6か月終値</span>
+        <span>終値 {latest?.Date ? <em>{latest.Date}</em> : null}</span>
         <strong>{last!==null ? last.toLocaleString(undefined,{maximumFractionDigits:2}) : "—"}</strong>
-        <small>{min!==null && max!==null ? `Range ${min.toLocaleString(undefined,{maximumFractionDigits:2})} - ${max.toLocaleString(undefined,{maximumFractionDigits:2})}` : "データなし"}</small>
+        <small className={change!==null ? (change>=0?"priceUp":"priceDown") : ""}>
+          {change!==null ? `${change>=0?"+":""}${change.toFixed(2)}%` : "—"} 
+          {min!==null && max!==null ? ` / 6M ${min.toLocaleString()} - ${max.toLocaleString()}` : ""}
+        </small>
       </div>
     </section>
     <Panel title="チャート">
@@ -340,7 +461,13 @@ function ChartPage({summary,ticker,setTicker,rows,watchBoard,addWatch}){
       </select><button className={`mini watchTextButton ${watched ? "watched" : ""}`} onClick={()=>!watched && addWatch(target)} disabled={watched}>
         <Star size={16} fill={watched ? "currentColor" : "none"}/>{watched ? "WATCHLIST登録済み" : "ウォッチ追加"}
       </button></div>
-      <div className="chartBox">{pts.length?<svg viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points={poly} fill="none" stroke="currentColor" strokeWidth="1.5"/></svg>:<span>チャートデータなし</span>}</div>
+      <div className="chartLegend">
+        <span><i className="legendCandle"></i>ローソク足</span>
+        <span><i className="legendMa20"></i>MA20</span>
+        <span><i className="legendMa60"></i>MA60</span>
+        <span className="chartSource">DATA: {chartInfo?.source || "—"}</span>
+      </div>
+      <div className="chartBox proChart">{rows.length?<FinancialChart rows={rows}/>:<div className="chartEmpty"><b>チャートデータなし</b><small>{chartInfo?.reason || "株価データを取得できませんでした"}</small></div>}</div>
     </Panel>
   </>
 }
