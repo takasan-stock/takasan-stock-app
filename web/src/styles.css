@@ -648,3 +648,41 @@ td small{color:#547088;font-size:12.5px}
   }
   .decisionTf,.decisionUnmet,.watchStepper{min-height:94px}
 }
+
+
+/* Data availability states for ENTRY CHECK */
+.entryStatusBadge.data{background:#eef3f7;color:#687f92;border:1px solid #d3dfe8}
+.decisionStatus.data{background:#eef3f7;color:#687f92}
+.entryUnknownCount{
+  font-style:normal;
+  font-size:11px;
+  font-weight:800;
+  color:#8296a7;
+  white-space:nowrap;
+}
+.entryCheckItem.unknown{
+  border-color:#dfe6ec;
+  background:#f7f9fb;
+}
+.entryCheckItem.unknown .entryCheckIcon{
+  background:#e9eef2;
+  color:#7d91a2;
+}
+.entryCheckItem.unknown strong{color:#718596}
+.entryCheckItem.unknown small{color:#9aabb8}
+.unknownChips{
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  margin-top:5px;
+}
+.unknownChips span{
+  display:inline-flex;
+  padding:5px 8px;
+  border-radius:999px;
+  background:#eef3f7;
+  border:1px solid #d8e2e9;
+  color:#6f8495;
+  font-size:11.5px;
+  font-weight:700;
+}
