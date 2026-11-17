@@ -252,12 +252,13 @@ function WatchPage({rows,saveMemo,removeWatch}) {
   const [drafts,setDrafts]=useState({});
   const idealCount=rows.filter(r=>String(r["監視ステータス"]||"").includes("理想")).length;
   const entryCount=rows.filter(r=>r["監視ステータス"]==="🔥 ENTRY確認").length;
-  const activeCount=rows.filter(r=>["⭐ 理想本命","🔥 ENTRY確認","👀 WATCH"].includes(r["監視ステータス"])).length;
+  const watchCount=rows.filter(r=>r["監視ステータス"]==="👀 WATCH").length;
   return <>
-    <section className="pageSummary">
+    <section className="pageSummary watchSummary">
       <Kpi label="⭐ 理想本命" value={idealCount} sub="即確認"/>
       <Kpi label="🔥 ENTRY確認" value={entryCount} sub="タイミング確認"/>
-      <Kpi label="👀 継続監視" value={activeCount} sub="アクティブ"/>
+      <Kpi label="👀 継続監視" value={watchCount} sub="WATCH"/>
+      <Kpi label="📌 WATCHLIST総数" value={rows.length} sub="登録銘柄"/>
     </section>
     <Panel title="🚦 ウォッチ昇格ボード"><div className="tableWrap"><table><thead><tr>
       <th>状態</th><th>銘柄</th><th>ランク</th><th>長期</th><th>RR</th><th>損切り</th><th>次アクション</th><th>メモ</th><th></th>
@@ -267,8 +268,10 @@ function WatchPage({rows,saveMemo,removeWatch}) {
       <td>{r["初動ランク"]||"—"}</td><td>{r["長期ステージ"]||"—"}</td><td>{r["RR目安"]||"—"}</td>
       <td>{r["実戦想定損切り距離%"] ? `${r["実戦想定損切り距離%"]}%` : "—"}</td>
       <td><span className="nextAction">{r["次アクション"]||"—"}</span></td>
-      <td><div className="memoRow"><input value={drafts[r.Ticker] ?? r["メモ"] ?? ""} onChange={e=>setDrafts({...drafts,[r.Ticker]:e.target.value})}/><button className="mini" onClick={()=>saveMemo(r.Ticker,drafts[r.Ticker] ?? r["メモ"] ?? "")}>保存</button></div></td>
-      <td><button className="danger" title="WATCHLISTから削除" onClick={()=>removeWatch(r.Ticker)}><Trash2 size={16}/></button></td>
+      <td><div className="memoRow"><input placeholder="確認ポイント・材料・次回チェックなど" value={drafts[r.Ticker] ?? r["メモ"] ?? ""} onChange={e=>setDrafts({...drafts,[r.Ticker]:e.target.value})}/><button className="mini" onClick={()=>saveMemo(r.Ticker,drafts[r.Ticker] ?? r["メモ"] ?? "")}>保存</button></div></td>
+      <td><button className="danger" title="WATCHLISTから削除" onClick={()=>{
+        if (window.confirm(`${r["証券コード"]||""} ${r["銘柄名"]||""} をWATCHLISTから削除しますか？`)) removeWatch(r.Ticker);
+      }}><Trash2 size={16}/></button></td>
     </tr>)}</tbody></table></div></Panel>
   </>
 }
