@@ -542,3 +542,36 @@ td small{color:#547088;font-size:12.5px}
   .entryStatus{width:100%;justify-content:space-between}
   .entryCheckGrid{grid-template-columns:1fr}
 }
+
+
+/* Daily / weekly timeframe controls */
+.timeframeToggle{
+  display:inline-flex;
+  padding:3px;
+  border:1px solid #cbdbea;
+  border-radius:10px;
+  background:#f3f8fc;
+  box-shadow:0 3px 12px rgba(70,105,135,.05);
+}
+.timeframeToggle button{
+  border:0;
+  background:transparent;
+  color:#617b91;
+  border-radius:7px;
+  padding:7px 13px;
+  cursor:pointer;
+  font-weight:800;
+}
+.timeframeToggle button.active{
+  background:#fff;
+  color:#1769aa;
+  box-shadow:0 2px 8px rgba(56,104,144,.12);
+}
+.legendMa5{background:#2a9d75}
+.legendMa21{background:#2d80c3}
+.legendMa200{background:#e7a429}
+.legendMa40{background:#e7a429}
+@media(max-width:720px){
+  .timeframeToggle{order:-1}
+  .timeframeToggle button{padding:8px 15px}
+}
