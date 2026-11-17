@@ -486,3 +486,59 @@ td small{color:#547088;font-size:12.5px}
   .chartLegend{gap:10px 14px}
   .chartSource{margin-left:0;width:100%}
 }
+
+
+/* Entry Check supplemental panel */
+.entryCheckPanel{
+  margin-bottom:16px;
+  padding:17px 18px;
+  border:1px solid #d7e5ef;
+  border-radius:16px;
+  background:#fff;
+  box-shadow:0 10px 28px rgba(70,105,135,.07);
+}
+.entryCheckPanel.entry-ready{border-color:#a8dfc3;background:linear-gradient(135deg,#fff 0%,#effbf5 100%)}
+.entryCheckPanel.entry-prep{border-color:#f0d486;background:linear-gradient(135deg,#fff 0%,#fffaf0 100%)}
+.entryCheckPanel.entry-wait{border-color:#d6e1e9;background:linear-gradient(135deg,#fff 0%,#f7fafc 100%)}
+.entryCheckHead{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:13px}
+.entryCheckHead h2{margin:1px 0 3px;color:#183a56;font-size:19px}
+.entryCheckHead p{margin:0;color:#70879a;font-size:12.5px}
+.entryStatus{display:flex;align-items:center;gap:12px;flex:0 0 auto}
+.entryStatus strong{font-size:26px;color:#214c69}
+.entryStatus strong small{font-size:14px;color:#8499a9}
+.entryStatusBadge{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:76px;padding:7px 11px;border-radius:999px;font-size:13px;font-weight:900;letter-spacing:.05em;
+}
+.entryStatusBadge.ready{background:#dff6e9;color:#14794b;border:1px solid #9ed7ba}
+.entryStatusBadge.prep{background:#fff2c9;color:#8a6500;border:1px solid #e5c568}
+.entryStatusBadge.wait{background:#edf2f6;color:#61788c;border:1px solid #d2dee8}
+
+.entryCheckGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.entryCheckItem{
+  display:flex;align-items:center;gap:9px;min-height:68px;padding:9px 10px;border-radius:11px;border:1px solid #e1e9ef;background:#fff;
+}
+.entryCheckItem.pass{border-color:#cde9dc;background:#f5fcf8}
+.entryCheckItem.fail{border-color:#ead9d9;background:#fffafa}
+.entryCheckIcon{
+  display:grid;place-items:center;width:25px;height:25px;border-radius:999px;flex:0 0 auto;font-weight:900;
+}
+.entryCheckItem.pass .entryCheckIcon{background:#d8f3e4;color:#168252}
+.entryCheckItem.fail .entryCheckIcon{background:#f7e4e4;color:#b95a5a}
+.entryCheckItem div{min-width:0}
+.entryCheckItem b,.entryCheckItem strong,.entryCheckItem small{display:block}
+.entryCheckItem b{font-size:11.5px;color:#7890a3;font-weight:700}
+.entryCheckItem strong{margin:1px 0;color:#244a66;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.entryCheckItem small{color:#94a5b3;font-size:10.5px}
+.entryCheckFoot{display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;padding-top:9px;border-top:1px solid #e7edf2;color:#668095;font-size:12px}
+.entryCheckFoot span{font-weight:700}
+
+@media(max-width:1050px){
+  .entryCheckGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:720px){
+  .entryCheckPanel{padding:13px}
+  .entryCheckHead{flex-direction:column}
+  .entryStatus{width:100%;justify-content:space-between}
+  .entryCheckGrid{grid-template-columns:1fr}
+}
