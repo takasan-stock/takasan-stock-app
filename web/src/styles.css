@@ -445,3 +445,44 @@ td small{color:#547088;font-size:12.5px}
 @media(max-width:720px){
   .watchSummary{display:grid;grid-template-columns:repeat(4,170px);overflow-x:auto;padding-bottom:3px}
 }
+
+
+/* Pro financial chart */
+.proChart{
+  height:520px;
+  display:block;
+  padding:0;
+  overflow:hidden;
+  color:inherit;
+}
+.financialChart{width:100%;height:100%;min-height:500px}
+.chartLegend{
+  display:flex;
+  align-items:center;
+  gap:18px;
+  flex-wrap:wrap;
+  margin:-2px 0 10px;
+  color:#60798f;
+  font-size:12.5px;
+}
+.chartLegend span{display:inline-flex;align-items:center;gap:6px}
+.chartLegend i{display:inline-block;width:18px;height:3px;border-radius:2px}
+.legendCandle{background:linear-gradient(90deg,#28b779 0 50%,#e35d6a 50%)}
+.legendMa20{background:#2d80c3}
+.legendMa60{background:#e7a429}
+.chartSource{margin-left:auto;font-weight:700;color:#7590a4}
+.chartPrice em{font-style:normal;font-size:11px;color:#8aa0b1}
+.priceUp{color:#1a9b65!important;font-weight:700}
+.priceDown{color:#cf4d5a!important;font-weight:700}
+.chartEmpty{height:100%;display:grid;place-content:center;text-align:center;gap:5px;color:#70889c}
+.chartEmpty small{max-width:560px;white-space:normal}
+@media(max-width:900px){
+  .proChart{height:480px}
+  .financialChart{min-height:460px}
+}
+@media(max-width:720px){
+  .proChart{height:430px}
+  .financialChart{min-height:410px}
+  .chartLegend{gap:10px 14px}
+  .chartSource{margin-left:0;width:100%}
+}

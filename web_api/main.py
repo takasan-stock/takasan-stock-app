@@ -174,10 +174,24 @@ def _chart_rows_from_df(df: pd.DataFrame) -> list[dict]:
         return []
     rows = []
     for _, r in work.tail(260).iterrows():
-        close = pd.to_numeric(pd.Series([r.get("Close")]), errors="coerce").iloc[0]
-        if pd.isna(close):
+        def pick(name):
+            value = pd.to_numeric(pd.Series([r.get(name)]), errors="coerce").iloc[0]
+            return None if pd.isna(value) else float(value)
+        close = pick("Close")
+        if close is None:
             continue
-        rows.append({"Date": str(r[date_col])[:10], "Close": float(close)})
+        open_ = pick("Open")
+        high = pick("High")
+        low = pick("Low")
+        volume = pick("Volume")
+        rows.append({
+            "Date": str(r[date_col])[:10],
+            "Open": open_ if open_ is not None else close,
+            "High": high if high is not None else close,
+            "Low": low if low is not None else close,
+            "Close": close,
+            "Volume": volume,
+        })
     return rows
 
 @app.get("/api/chart/{ticker}")
