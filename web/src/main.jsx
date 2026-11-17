@@ -59,7 +59,7 @@ function App() {
 
   useEffect(() => {
     if (!selectedTicker) return;
-    api(`/api/chart/${encodeURIComponent(selectedTicker)}?period=6mo`)
+    api(`/api/chart/${encodeURIComponent(selectedTicker)}?period=2y`)
       .then((r) => {
         setChart(r.rows || []);
         setChartInfo({source:r.source || null, reason:r.unavailable_reason || null});
@@ -335,7 +335,44 @@ function smaData(rows, period){
   }).filter(Boolean);
 }
 
-function FinancialChart({rows}){
+function aggregateWeekly(rows){
+  const groups=new Map();
+  for(const r of rows){
+    if(!r?.Date) continue;
+    const d=new Date(`${r.Date}T00:00:00Z`);
+    if(Number.isNaN(d.getTime())) continue;
+    const day=d.getUTCDay();
+    const monday=new Date(d);
+    monday.setUTCDate(d.getUTCDate()-((day+6)%7));
+    const key=monday.toISOString().slice(0,10);
+    const existing=groups.get(key);
+    const open=num(r.Open) ?? num(r.Close);
+    const high=num(r.High) ?? num(r.Close);
+    const low=num(r.Low) ?? num(r.Close);
+    const close=num(r.Close);
+    const volume=num(r.Volume) ?? 0;
+    if(close===null) continue;
+    if(!existing){
+      groups.set(key,{
+        Date:r.Date,
+        Open:open,
+        High:high,
+        Low:low,
+        Close:close,
+        Volume:volume,
+      });
+    }else{
+      existing.Date=r.Date;
+      existing.High=Math.max(existing.High ?? high,high);
+      existing.Low=Math.min(existing.Low ?? low,low);
+      existing.Close=close;
+      existing.Volume=(existing.Volume||0)+volume;
+    }
+  }
+  return [...groups.values()].sort((a,b)=>String(a.Date).localeCompare(String(b.Date)));
+}
+
+function FinancialChart({rows,timeframe}){
   const hostRef=useRef(null);
   useEffect(()=>{
     const host=hostRef.current;
@@ -362,7 +399,7 @@ function FinancialChart({rows}){
         timeVisible:false,
         secondsVisible:false,
         rightOffset:3,
-        barSpacing:8,
+        barSpacing:timeframe==="weekly"?10:8,
         minBarSpacing:3,
       },
       crosshair:{
@@ -390,15 +427,23 @@ function FinancialChart({rows}){
       close:num(r.Close),
     })).filter(d=>d.close!==null));
 
-    const ma20=chart.addSeries(LineSeries,{
-      color:"#2d80c3",lineWidth:2,priceLineVisible:false,lastValueVisible:false,title:"MA20"
-    });
-    ma20.setData(smaData(rows,20));
+    const maConfig=timeframe==="weekly"
+      ? [
+          {period:5,title:"MA5",color:"#2d80c3"},
+          {period:40,title:"MA40",color:"#e7a429"},
+        ]
+      : [
+          {period:5,title:"MA5",color:"#2a9d75"},
+          {period:21,title:"MA21",color:"#2d80c3"},
+          {period:200,title:"MA200",color:"#e7a429"},
+        ];
 
-    const ma60=chart.addSeries(LineSeries,{
-      color:"#e7a429",lineWidth:2,priceLineVisible:false,lastValueVisible:false,title:"MA60"
-    });
-    ma60.setData(smaData(rows,60));
+    for(const cfg of maConfig){
+      const series=chart.addSeries(LineSeries,{
+        color:cfg.color,lineWidth:2,priceLineVisible:false,lastValueVisible:false,title:cfg.title
+      });
+      series.setData(smaData(rows,cfg.period));
+    }
 
     const volume=chart.addSeries(HistogramSeries,{
       priceFormat:{type:"volume"},
@@ -412,7 +457,9 @@ function FinancialChart({rows}){
       return {time:r.Date,value:v || 0,color:(c!==null && o!==null && c>=o)?"rgba(40,183,121,.42)":"rgba(227,93,106,.42)"};
     }));
 
-    chart.timeScale().fitContent();
+    const visibleBars=timeframe==="weekly"?60:130;
+    const from=Math.max(0,rows.length-visibleBars);
+    chart.timeScale().setVisibleLogicalRange({from,to:rows.length+2});
 
     const ro=new ResizeObserver(()=>{
       if(host.clientWidth && host.clientHeight){
@@ -421,7 +468,7 @@ function FinancialChart({rows}){
     });
     ro.observe(host);
     return ()=>{ro.disconnect();chart.remove();};
-  },[rows]);
+  },[rows,timeframe]);
 
   return <div ref={hostRef} className="financialChart"/>;
 }
@@ -433,7 +480,7 @@ function lastSma(rows, period){
   return vals.reduce((a,b)=>a+b,0)/period;
 }
 
-function entryAssessment(row, chartRows){
+function entryAssessment(row, chartRows, timeframe){
   const rank=String(row?.["初動ランク"]||"");
   const stage=String(row?.["長期ステージ"]||"");
   const rr=num(row?.["RR目安"]);
@@ -442,8 +489,13 @@ function entryAssessment(row, chartRows){
   const settle=String(row?.["反転定着"]||"");
   const shape=String(row?.["EARLY形状判定"]||"");
   const close=num(chartRows?.[chartRows.length-1]?.Close);
-  const ma20=lastSma(chartRows||[],20);
-  const ma60=lastSma(chartRows||[],60);
+
+  const fast=lastSma(chartRows||[],timeframe==="weekly"?5:21);
+  const slow=lastSma(chartRows||[],timeframe==="weekly"?40:200);
+  const priceLabel=timeframe==="weekly"?"価格 / MA5":"価格 / MA21";
+  const trendLabel=timeframe==="weekly"?"MA5 / MA40":"MA21 / MA200";
+  const priceHint=timeframe==="weekly"?"週足終値がMA5以上":"日足終値がMA21以上";
+  const trendHint=timeframe==="weekly"?"MA5≧MA40":"MA21≧MA200";
 
   const checks=[
     {label:"初動ランク",pass:["S","A"].includes(rank),value:rank||"—",hint:"S / A"},
@@ -453,29 +505,33 @@ function entryAssessment(row, chartRows){
     {label:"反転",pass:reversal.includes("確認"),value:reversal||"—",hint:"反転確認"},
     {label:"定着",pass:settle.includes("確認"),value:settle||"—",hint:"定着確認"},
     {label:"形状",pass:shape.includes("適合"),value:shape||"—",hint:"EARLY適合"},
-    {label:"価格 / MA20",pass:close!==null && ma20!==null && close>=ma20,value:(close!==null&&ma20!==null)?`${((close/ma20-1)*100).toFixed(1)}%`:"—",hint:"終値がMA20以上"},
-    {label:"MA20 / MA60",pass:ma20!==null && ma60!==null && ma20>=ma60,value:(ma20!==null&&ma60!==null)?(ma20>=ma60?"上向き":"下向き"):"—",hint:"MA20≧MA60"},
+    {label:priceLabel,pass:close!==null && fast!==null && close>=fast,value:(close!==null&&fast!==null)?`${((close/fast-1)*100).toFixed(1)}%`:"—",hint:priceHint},
+    {label:trendLabel,pass:fast!==null && slow!==null && fast>=slow,value:(fast!==null&&slow!==null)?(fast>=slow?"上向き":"下向き"):"—",hint:trendHint},
   ];
 
   const passed=checks.filter(c=>c.pass).length;
   const corePassed=checks.slice(0,7).filter(c=>c.pass).length;
   const status=(corePassed===7 && passed>=8)?"READY":(corePassed>=5 && passed>=6)?"PREP":"WAIT";
-  return {status,passed,total:checks.length,checks,ma20,ma60,close};
+  return {status,passed,total:checks.length,checks,fast,slow,close};
 }
 
 function ChartPage({summary,earlyRows,ticker,setTicker,rows,chartInfo,watchBoard,addWatch}){
+  const [timeframe,setTimeframe]=useState("daily");
+  const weeklyRows=useMemo(()=>aggregateWeekly(rows),[rows]);
+  const chartRows=timeframe==="weekly"?weeklyRows:rows;
+  const visibleRows=timeframe==="weekly"?chartRows.slice(-60):chartRows.slice(-130);
   const baseTarget=summary.find(r=>r.Ticker===ticker) || {};
   const earlyTarget=earlyRows.find(r=>r.Ticker===ticker || String(r["証券コード"]||"")===String(baseTarget["証券コード"]||"")) || {};
   const watchTarget=watchBoard.find(r=>r.Ticker===ticker || String(r["証券コード"]||"")===String(baseTarget["証券コード"]||"")) || {};
   const target={...baseTarget,...earlyTarget,...watchTarget};
   const watched=isWatched(target, watchBoard);
-  const ys=rows.map(r=>num(r.Close)).filter(v=>v!==null);
+  const ys=visibleRows.map(r=>num(r.Close)).filter(v=>v!==null);
   const min=ys.length?Math.min(...ys):null, max=ys.length?Math.max(...ys):null;
-  const last=ys.length?ys[ys.length-1]:null;
-  const latest=rows.length?rows[rows.length-1]:null;
-  const prev=rows.length>1?num(rows[rows.length-2]?.Close):null;
+  const last=chartRows.length?num(chartRows[chartRows.length-1]?.Close):null;
+  const latest=chartRows.length?chartRows[chartRows.length-1]:null;
+  const prev=chartRows.length>1?num(chartRows[chartRows.length-2]?.Close):null;
   const change=(last!==null && prev!==null && prev!==0)?((last-prev)/prev)*100:null;
-  const assessment=entryAssessment(target,rows);
+  const assessment=entryAssessment(target,chartRows,timeframe);
   return <>
     <section className="chartHero">
       <div>
@@ -492,7 +548,7 @@ function ChartPage({summary,earlyRows,ticker,setTicker,rows,chartInfo,watchBoard
         <strong>{last!==null ? last.toLocaleString(undefined,{maximumFractionDigits:2}) : "—"}</strong>
         <small className={change!==null ? (change>=0?"priceUp":"priceDown") : ""}>
           {change!==null ? `${change>=0?"+":""}${change.toFixed(2)}%` : "—"} 
-          {min!==null && max!==null ? ` / 6M ${min.toLocaleString()} - ${max.toLocaleString()}` : ""}
+          {min!==null && max!==null ? ` / ${timeframe==="weekly"?"60週":"6M"} ${min.toLocaleString()} - ${max.toLocaleString()}` : ""}
         </small>
       </div>
     </section>
@@ -520,25 +576,35 @@ function ChartPage({summary,earlyRows,ticker,setTicker,rows,chartInfo,watchBoard
         </div>)}
       </div>
       <div className="entryCheckFoot">
-        <span>MA20 {assessment.ma20!==null?assessment.ma20.toLocaleString(undefined,{maximumFractionDigits:1}):"—"}</span>
-        <span>MA60 {assessment.ma60!==null?assessment.ma60.toLocaleString(undefined,{maximumFractionDigits:1}):"—"}</span>
+        <span>{timeframe==="weekly"?"週足":"日足"}</span>
+        <span>{timeframe==="weekly"?"MA5":"MA21"} {assessment.fast!==null?assessment.fast.toLocaleString(undefined,{maximumFractionDigits:1}):"—"}</span>
+        <span>{timeframe==="weekly"?"MA40":"MA200"} {assessment.slow!==null?assessment.slow.toLocaleString(undefined,{maximumFractionDigits:1}):"—"}</span>
         <span>終値 {assessment.close!==null?assessment.close.toLocaleString(undefined,{maximumFractionDigits:1}):"—"}</span>
       </div>
     </section>
 
     <Panel title="チャート">
-      <div className="chartControls"><select value={ticker} onChange={e=>setTicker(e.target.value)}>
-        {summary.slice(0,200).map(r=><option key={r.Ticker} value={r.Ticker}>{r["証券コード"]} {r["銘柄名"]}</option>)}
-      </select><button className={`mini watchTextButton ${watched ? "watched" : ""}`} onClick={()=>!watched && addWatch(target)} disabled={watched}>
-        <Star size={16} fill={watched ? "currentColor" : "none"}/>{watched ? "WATCHLIST登録済み" : "ウォッチ追加"}
-      </button></div>
+      <div className="chartControls">
+        <div className="timeframeToggle" role="group" aria-label="時間軸">
+          <button className={timeframe==="daily"?"active":""} onClick={()=>setTimeframe("daily")}>日足</button>
+          <button className={timeframe==="weekly"?"active":""} onClick={()=>setTimeframe("weekly")}>週足</button>
+        </div>
+        <select value={ticker} onChange={e=>setTicker(e.target.value)}>
+          {summary.slice(0,200).map(r=><option key={r.Ticker} value={r.Ticker}>{r["証券コード"]} {r["銘柄名"]}</option>)}
+        </select>
+        <button className={`mini watchTextButton ${watched ? "watched" : ""}`} onClick={()=>!watched && addWatch(target)} disabled={watched}>
+          <Star size={16} fill={watched ? "currentColor" : "none"}/>{watched ? "WATCHLIST登録済み" : "ウォッチ追加"}
+        </button>
+      </div>
       <div className="chartLegend">
-        <span><i className="legendCandle"></i>ローソク足</span>
-        <span><i className="legendMa20"></i>MA20</span>
-        <span><i className="legendMa60"></i>MA60</span>
+        <span><i className="legendCandle"></i>{timeframe==="weekly"?"週足ローソク":"日足ローソク"}</span>
+        <span><i className="legendMa5"></i>MA5</span>
+        {timeframe==="daily"
+          ? <><span><i className="legendMa21"></i>MA21</span><span><i className="legendMa200"></i>MA200</span></>
+          : <span><i className="legendMa40"></i>MA40</span>}
         <span className="chartSource">DATA: {chartInfo?.source || "—"}</span>
       </div>
-      <div className="chartBox proChart">{rows.length?<FinancialChart rows={rows}/>:<div className="chartEmpty"><b>チャートデータなし</b><small>{chartInfo?.reason || "株価データを取得できませんでした"}</small></div>}</div>
+      <div className="chartBox proChart">{chartRows.length?<FinancialChart rows={chartRows} timeframe={timeframe}/>:<div className="chartEmpty"><b>チャートデータなし</b><small>{chartInfo?.reason || "株価データを取得できませんでした"}</small></div>}</div>
     </Panel>
   </>
 }
