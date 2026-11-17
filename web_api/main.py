@@ -100,6 +100,39 @@ def health():
 def summary():
     return {"rows": _records(_sheet("4系統サマリー"))}
 
+def _find_stock_row(df: pd.DataFrame, ticker: str) -> dict:
+    if df is None or df.empty:
+        return {}
+    work = df.loc[:,~df.columns.duplicated(keep="first")].copy()
+    raw = str(ticker or "").strip()
+    code = raw.split(".")[0]
+    mask = pd.Series(False, index=work.index)
+    if "Ticker" in work.columns:
+        mask |= work["Ticker"].astype(str).str.strip().eq(raw)
+    if "証券コード" in work.columns:
+        mask |= work["証券コード"].astype(str).str.strip().eq(code)
+    hit = work[mask].copy()
+    if hit.empty:
+        return {}
+    if "初動優先スコア" in hit.columns:
+        hit["_sort_score"] = pd.to_numeric(hit["初動優先スコア"], errors="coerce")
+        hit = hit.sort_values("_sort_score", ascending=False, na_position="last").drop(columns=["_sort_score"])
+    records = _records(hit.head(1))
+    return records[0] if records else {}
+
+@app.get("/api/stock-context/{ticker}")
+def stock_context(ticker: str):
+    summary_row = _find_stock_row(_sheet("4系統サマリー"), ticker)
+    weekly_row = _find_stock_row(_sheet("週足転換H"), ticker)
+    merged = {**summary_row, **weekly_row}
+    return {
+        "row": merged,
+        "sources": {
+            "summary": bool(summary_row),
+            "weekly": bool(weekly_row),
+        },
+    }
+
 @app.get("/api/early")
 def early():
     df = early_top20_pool(_sheet("週足転換H"),70,70).head(20).copy()
