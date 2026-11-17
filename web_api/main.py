@@ -19,6 +19,7 @@ from early_rules import (
     early_ideal_mask,
     build_watchlist_promotion_board,
 )
+from jquants_prices import JQuantsPriceClient
 
 app = FastAPI(title="Takasan Stock Hunter API", version="0.1.0")
 origins = [x.strip() for x in os.getenv("CORS_ORIGINS","*").split(",") if x.strip()]
@@ -148,18 +149,66 @@ def delete_watch(ticker: str):
     _save_watch(out)
     return None
 
+def _chart_period_start(period: str):
+    p = str(period or "6mo").strip().lower()
+    offsets = {
+        "1mo": pd.DateOffset(months=1),
+        "3mo": pd.DateOffset(months=3),
+        "6mo": pd.DateOffset(months=6),
+        "1y": pd.DateOffset(years=1),
+        "2y": pd.DateOffset(years=2),
+        "5y": pd.DateOffset(years=5),
+    }
+    return (pd.Timestamp.today().normalize() - offsets.get(p, offsets["6mo"])).date()
+
+def _chart_rows_from_df(df: pd.DataFrame) -> list[dict]:
+    if df is None or df.empty:
+        return []
+    work = df.copy()
+    if isinstance(work.columns, pd.MultiIndex):
+        work.columns = work.columns.get_level_values(0)
+    if isinstance(work.index, pd.DatetimeIndex):
+        work = work.reset_index()
+    date_col = "Date" if "Date" in work.columns else work.columns[0]
+    if "Close" not in work.columns:
+        return []
+    rows = []
+    for _, r in work.tail(260).iterrows():
+        close = pd.to_numeric(pd.Series([r.get("Close")]), errors="coerce").iloc[0]
+        if pd.isna(close):
+            continue
+        rows.append({"Date": str(r[date_col])[:10], "Close": float(close)})
+    return rows
+
 @app.get("/api/chart/{ticker}")
 def chart(ticker: str, period: str="6mo"):
+    errors = []
+
+    # Primary source for Japanese equities: J-Quants, when configured.
+    try:
+        jq = JQuantsPriceClient.from_env()
+        if jq is not None:
+            df = jq.daily_bars(ticker, _chart_period_start(period), date.today())
+            rows = _chart_rows_from_df(df)
+            if rows:
+                return {"rows": rows, "source": "J-Quants"}
+            errors.append("J-Quants: empty")
+        else:
+            errors.append("J-Quants: not configured")
+    except Exception as exc:
+        errors.append(f"J-Quants: {type(exc).__name__}")
+        print(f"[chart] J-Quants failed {ticker}: {type(exc).__name__}: {exc}", flush=True)
+
+    # Secondary fallback: yfinance.
     try:
         df = yf.download(ticker, period=period, interval="1d", auto_adjust=True, progress=False)
-        if df is None or df.empty: return {"rows":[]}
-        if isinstance(df.columns,pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df.reset_index()
-        date_col = df.columns[0]
-        rows=[]
-        for _,r in df.tail(260).iterrows():
-            rows.append({"Date":str(r[date_col])[:10],"Close":float(r["Close"])})
-        return {"rows":rows}
+        rows = _chart_rows_from_df(df)
+        if rows:
+            return {"rows": rows, "source": "Yahoo Finance"}
+        errors.append("Yahoo Finance: empty")
     except Exception as exc:
-        raise HTTPException(502, f"chart fetch failed: {type(exc).__name__}")
+        errors.append(f"Yahoo Finance: {type(exc).__name__}")
+        print(f"[chart] Yahoo failed {ticker}: {type(exc).__name__}: {exc}", flush=True)
+
+    # Keep the endpoint successful so the UI can show a useful data-source message.
+    return {"rows": [], "source": None, "unavailable_reason": " / ".join(errors)}
