@@ -92,6 +92,11 @@ function App() {
     await reload();
   };
 
+  const openChart = (row) => {
+    if (row?.Ticker) setSelectedTicker(row.Ticker);
+    setPage("chart");
+  };
+
   return <div className="app">
     <aside className="sidebar">
       <div className="brand"><Radar size={24}/><span>Takasan Stock Hunter</span></div>
@@ -114,7 +119,7 @@ function App() {
       </header>
 
       {loading ? <div className="loading">データを読み込み中...</div> : <>
-        {page==="home" && <HomePage early={earlyTop} watchBoard={watchBoard} summary={summary} addWatch={addWatch}/>}
+        {page==="home" && <HomePage early={earlyTop} watchBoard={watchBoard} summary={summary} addWatch={addWatch} openWatch={()=>setPage("watch")} openChart={openChart}/>} 
         {page==="early" && <EarlyPage rows={earlyTop} watchBoard={watchBoard} addWatch={addWatch}/>}
         {page==="watch" && <WatchPage rows={watchBoard} saveMemo={saveMemo} removeWatch={removeWatch}/>}
         {page==="ranking" && <RankingPage rows={summary} watchBoard={watchBoard} addWatch={addWatch}/>}
@@ -128,9 +133,30 @@ function pageTitle(page){return ({home:"TODAY COMMAND CENTER",early:"EARLY HUNTE
 
 function Kpi({label,value,sub}){return <div className="kpi"><span>{label}</span><strong>{value}</strong><small>{sub}</small></div>}
 
-function HomePage({early,watchBoard,summary,addWatch}){
+function HomePage({early,watchBoard,summary,addWatch,openWatch,openChart}){
   const idealCount = early.filter(ideal).length;
   const entryCount = watchBoard.filter(r=>r["監視ステータス"]==="🔥 ENTRY確認").length;
+
+  const activeWatch = watchBoard
+    .filter(r=>["⭐ 理想本命","🔥 ENTRY確認","👀 WATCH"].includes(r["監視ステータス"]))
+    .map(r=>({...r,_source:"watch"}));
+
+  const watchKeys = new Set(activeWatch.map(r=>String(r.Ticker||r["証券コード"]||"").trim()));
+  const earlyCandidates = early
+    .filter(r=>ideal(r) || ["S","A"].includes(String(r["初動ランク"]||"")))
+    .filter(r=>!watchKeys.has(String(r.Ticker||r["証券コード"]||"").trim()))
+    .map(r=>({...r,_source:"early"}));
+
+  const priority = {"⭐ 理想本命":0,"🔥 ENTRY確認":1,"👀 WATCH":2};
+  const actionRows = [...activeWatch,...earlyCandidates]
+    .sort((a,b)=>{
+      const ap = a._source==="watch" ? (priority[a["監視ステータス"]] ?? 3) : (ideal(a) ? 1 : 3);
+      const bp = b._source==="watch" ? (priority[b["監視ステータス"]] ?? 3) : (ideal(b) ? 1 : 3);
+      if (ap !== bp) return ap-bp;
+      return (num(b["初動優先スコア"])||0) - (num(a["初動優先スコア"])||0);
+    })
+    .slice(0,6);
+
   return <>
     <section className="kpis">
       <Kpi label="⭐ 理想本命" value={idealCount} sub="EARLY最優先"/>
@@ -138,6 +164,45 @@ function HomePage({early,watchBoard,summary,addWatch}){
       <Kpi label="🌱 EARLY TOP20" value={early.length} sub="初動候補"/>
       <Kpi label="🏆 総合候補" value={summary.length} sub="全ランキング"/>
     </section>
+
+    <section className="actionBoard">
+      <div className="actionBoardHead">
+        <div>
+          <span className="eyebrow">TODAY ACTION QUEUE</span>
+          <h2>今日やること</h2>
+          <p>上から順に確認。判断済みの銘柄はWATCHLISTとCHARTへ。</p>
+        </div>
+        <button className="mini actionBoardLink" onClick={openWatch}>WATCHLISTを開く</button>
+      </div>
+
+      {actionRows.length ? <div className="actionQueue">
+        {actionRows.map((r,i)=>{
+          const isWatch = r._source==="watch";
+          const status = isWatch ? r["監視ステータス"] : (ideal(r) ? "⭐ 理想本命" : "🌱 EARLY候補");
+          const action = isWatch ? (r["次アクション"]||"継続確認") : "WATCHLIST登録を検討";
+          const watched = isWatched(r,watchBoard);
+          return <article className={`actionItem action-${i+1}`} key={r.Ticker||r["証券コード"]||i}>
+            <div className="actionPriority">{i+1}</div>
+            <div className="actionIdentity">
+              <StatusBadge text={status}/>
+              <strong>{r["証券コード"]||"—"} <small>{r["銘柄名"]||""}</small></strong>
+            </div>
+            <div className="actionMetrics">
+              <span>初動 <b>{r["初動優先スコア"]||"—"}</b></span>
+              <span>Rank <b>{r["初動ランク"]||"—"}</b></span>
+              <span>RR <b>{r["RR目安"]||"—"}</b></span>
+            </div>
+            <div className="actionNext">{action}</div>
+            <div className="actionButtons">
+              {!watched && <button className="mini addAction" onClick={()=>addWatch(r)}><Star size={15}/> WATCHLIST</button>}
+              {watched && <button className="mini watchedAction" disabled><Star size={15} fill="currentColor"/> 登録済み</button>}
+              <button className="mini chartAction" onClick={()=>openChart(r)}>CHART</button>
+            </div>
+          </article>
+        })}
+      </div> : <div className="actionEmpty">現在、優先アクションはありません。EARLY TOP20を確認してください。</div>}
+    </section>
+
     <Panel title="今日見るべき EARLY">
       <EarlyTable rows={early.slice(0,10)} watchRows={watchBoard} addWatch={addWatch}/>
     </Panel>

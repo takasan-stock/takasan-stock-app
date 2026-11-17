@@ -345,3 +345,92 @@ td small{color:#547088;font-size:12.5px}
   .chartPrice{text-align:left}
   .chartMeta{flex-wrap:wrap;gap:8px 14px}
 }
+
+
+/* TODAY action queue */
+.actionBoard{
+  margin-bottom:18px;
+  padding:18px;
+  border:1px solid #d7e5ef;
+  border-radius:16px;
+  background:linear-gradient(135deg,rgba(255,255,255,.96) 0%,rgba(240,249,255,.96) 100%);
+  box-shadow:0 10px 30px rgba(70,105,135,.08);
+}
+.actionBoardHead{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:16px;
+  margin-bottom:13px;
+}
+.actionBoardHead h2{margin:1px 0 3px;font-size:19px;color:#17324d}
+.actionBoardHead p{margin:0;color:#70879a;font-size:13px}
+.actionBoardLink{flex:0 0 auto}
+
+.actionQueue{display:grid;gap:8px}
+.actionItem{
+  display:grid;
+  grid-template-columns:36px minmax(190px,1.25fr) minmax(210px,.9fr) minmax(190px,1fr) auto;
+  align-items:center;
+  gap:12px;
+  min-height:66px;
+  padding:10px 12px;
+  border:1px solid #dfe9f1;
+  border-radius:12px;
+  background:#fff;
+}
+.actionItem:nth-child(1){border-color:#ecd387;background:#fffdf4}
+.actionItem:nth-child(2){border-color:#d7e5ef}
+.actionPriority{
+  display:grid;
+  place-items:center;
+  width:30px;height:30px;
+  border-radius:999px;
+  background:#eaf2f8;
+  color:#496a83;
+  font-weight:900;
+}
+.actionItem:nth-child(1) .actionPriority{background:#ffe9a5;color:#806000}
+.actionIdentity{display:flex;align-items:center;gap:9px;min-width:0}
+.actionIdentity strong{color:#173b58;font-size:14px;white-space:nowrap}
+.actionIdentity strong small{display:block;margin-top:2px;color:#668096;font-size:12px;font-weight:600}
+.actionMetrics{display:flex;gap:12px;color:#6b8295;font-size:12.5px}
+.actionMetrics b{color:#234a67}
+.actionNext{
+  color:#3d627c;
+  font-size:13px;
+  font-weight:700;
+  white-space:normal;
+  line-height:1.35;
+}
+.actionButtons{display:flex;gap:7px;justify-content:flex-end}
+.addAction,.watchedAction{display:inline-flex;align-items:center;gap:5px}
+.watchedAction{color:#b88700;background:#fff8de;border-color:#e9c659;cursor:default}
+.chartAction{font-weight:700;color:#246b98}
+.actionEmpty{
+  padding:15px;
+  border-radius:11px;
+  background:#f7fafc;
+  color:#698195;
+  text-align:center;
+  font-size:13px;
+}
+
+@media(max-width:1250px){
+  .actionItem{
+    grid-template-columns:34px minmax(180px,1.1fr) minmax(180px,.9fr) minmax(160px,1fr);
+  }
+  .actionButtons{grid-column:2/-1;justify-content:flex-start;padding-bottom:2px}
+}
+@media(max-width:820px){
+  .actionBoard{padding:13px}
+  .actionBoardHead{align-items:stretch;flex-direction:column}
+  .actionBoardLink{align-self:flex-start}
+  .actionItem{
+    grid-template-columns:34px 1fr;
+    gap:7px 10px;
+    padding:11px;
+  }
+  .actionIdentity,.actionMetrics,.actionNext,.actionButtons{grid-column:2}
+  .actionMetrics{flex-wrap:wrap}
+}
