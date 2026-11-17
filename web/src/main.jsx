@@ -19,6 +19,16 @@ const num = (v) => {
 const ideal = (row) => row["理想本命"] === "⭐ 理想本命"
   || row["監視ステータス"] === "⭐ 理想本命";
 
+const isWatched = (row, watchRows = []) => {
+  const ticker = String(row?.Ticker || "").trim();
+  const code = String(row?.["証券コード"] || "").trim();
+  return watchRows.some((w) => {
+    const wt = String(w?.Ticker || "").trim();
+    const wc = String(w?.["証券コード"] || "").trim();
+    return (ticker && wt === ticker) || (code && wc === code);
+  });
+};
+
 function App() {
   const [page, setPage] = useState("home");
   const [summary, setSummary] = useState([]);
@@ -105,10 +115,10 @@ function App() {
 
       {loading ? <div className="loading">データを読み込み中...</div> : <>
         {page==="home" && <HomePage early={earlyTop} watchBoard={watchBoard} summary={summary} addWatch={addWatch}/>}
-        {page==="early" && <EarlyPage rows={earlyTop} addWatch={addWatch}/>}
+        {page==="early" && <EarlyPage rows={earlyTop} watchBoard={watchBoard} addWatch={addWatch}/>}
         {page==="watch" && <WatchPage rows={watchBoard} saveMemo={saveMemo} removeWatch={removeWatch}/>}
-        {page==="ranking" && <RankingPage rows={summary} addWatch={addWatch}/>}
-        {page==="chart" && <ChartPage summary={summary} ticker={selectedTicker} setTicker={setSelectedTicker} rows={chart} addWatch={addWatch}/>}
+        {page==="ranking" && <RankingPage rows={summary} watchBoard={watchBoard} addWatch={addWatch}/>}
+        {page==="chart" && <ChartPage summary={summary} ticker={selectedTicker} setTicker={setSelectedTicker} rows={chart} watchBoard={watchBoard} addWatch={addWatch}/>}
       </>}
     </main>
   </div>;
@@ -129,23 +139,36 @@ function HomePage({early,watchBoard,summary,addWatch}){
       <Kpi label="🏆 総合候補" value={summary.length} sub="全ランキング"/>
     </section>
     <Panel title="今日見るべき EARLY">
-      <EarlyTable rows={early.slice(0,10)} addWatch={addWatch}/>
+      <EarlyTable rows={early.slice(0,10)} watchRows={watchBoard} addWatch={addWatch}/>
     </Panel>
   </>
 }
 
-function EarlyPage({rows,addWatch}){return <Panel title="EARLY最優先 TOP20"><EarlyTable rows={rows} addWatch={addWatch}/></Panel>}
+function EarlyPage({rows,watchBoard,addWatch}){return <Panel title="EARLY最優先 TOP20"><EarlyTable rows={rows} watchRows={watchBoard} addWatch={addWatch}/></Panel>}
 
-function EarlyTable({rows,addWatch}) {
+function EarlyTable({rows,watchRows,addWatch}) {
   return <div className="tableWrap"><table><thead><tr>
     <th>銘柄</th><th>初動</th><th>ランク</th><th>長期ステージ</th><th>RR</th><th>損切り</th><th>反転</th><th>定着</th><th>形状</th><th></th>
-  </tr></thead><tbody>{rows.map((r,i)=><tr key={r.Ticker||i} className={ideal(r)?"ideal":""}>
-    <td><b>{r["証券コード"]}</b><br/><small>{r["銘柄名"]}</small></td>
-    <td>{r["初動優先スコア"]}</td><td><Badge text={r["初動ランク"]}/></td>
-    <td>{r["長期ステージ"]}</td><td>{r["RR目安"]}</td><td>{r["実戦想定損切り距離%"]}%</td>
-    <td>{r["反転確認"]}</td><td>{r["反転定着"]}</td><td>{r["EARLY形状判定"]}</td>
-    <td><button className="mini" onClick={()=>addWatch(r)}>⭐</button></td>
-  </tr>)}</tbody></table></div>
+  </tr></thead><tbody>{rows.map((r,i)=>{
+    const watched = isWatched(r, watchRows);
+    return <tr key={r.Ticker||i} className={ideal(r)?"ideal":""}>
+      <td><b>{r["証券コード"]}</b><br/><small>{r["銘柄名"]}</small></td>
+      <td>{r["初動優先スコア"]}</td><td><Badge text={r["初動ランク"]}/></td>
+      <td>{r["長期ステージ"]}</td><td>{r["RR目安"]}</td><td>{r["実戦想定損切り距離%"]}%</td>
+      <td>{r["反転確認"]}</td><td>{r["反転定着"]}</td><td>{r["EARLY形状判定"]}</td>
+      <td>
+        <button
+          className={`mini watchToggle ${watched ? "watched" : ""}`}
+          onClick={()=>!watched && addWatch(r)}
+          disabled={watched}
+          title={watched ? "WATCHLIST登録済み" : "WATCHLISTに追加"}
+          aria-label={watched ? "WATCHLIST登録済み" : "WATCHLISTに追加"}
+        >
+          <Star size={17} fill={watched ? "currentColor" : "none"}/>
+        </button>
+      </td>
+    </tr>
+  })}</tbody></table></div>
 }
 
 function WatchPage({rows,saveMemo,removeWatch}) {
@@ -162,27 +185,42 @@ function WatchPage({rows,saveMemo,removeWatch}) {
   </tr>)}</tbody></table></div></Panel>
 }
 
-function RankingPage({rows,addWatch}) {
+function RankingPage({rows,watchBoard,addWatch}) {
   const sorted=[...rows].sort((a,b)=>(num(b["総合スコア"])||0)-(num(a["総合スコア"])||0)).slice(0,50);
   return <Panel title="総合ランキング"><div className="tableWrap"><table><thead><tr>
     <th>銘柄</th><th>総合</th><th>ランク</th><th>実戦</th><th>RS</th><th>出来高M</th><th>主力</th><th></th>
-  </tr></thead><tbody>{sorted.map((r,i)=><tr key={r.Ticker||i}>
-    <td><b>{r["証券コード"]}</b><br/><small>{r["銘柄名"]}</small></td>
-    <td>{r["総合スコア"]}</td><td><Badge text={r["総合ランク"]}/></td><td>{r["実戦スコア"]}</td>
-    <td>{r["RS Rating"]}</td><td>{r["出来高モメンタム"]}</td><td>{r["主力シグナル"]}</td>
-    <td><button className="mini" onClick={()=>addWatch(r)}>⭐</button></td>
-  </tr>)}</tbody></table></div></Panel>
+  </tr></thead><tbody>{sorted.map((r,i)=>{
+    const watched = isWatched(r, watchBoard);
+    return <tr key={r.Ticker||i}>
+      <td><b>{r["証券コード"]}</b><br/><small>{r["銘柄名"]}</small></td>
+      <td>{r["総合スコア"]}</td><td><Badge text={r["総合ランク"]}/></td><td>{r["実戦スコア"]}</td>
+      <td>{r["RS Rating"]}</td><td>{r["出来高モメンタム"]}</td><td>{r["主力シグナル"]}</td>
+      <td>
+        <button
+          className={`mini watchToggle ${watched ? "watched" : ""}`}
+          onClick={()=>!watched && addWatch(r)}
+          disabled={watched}
+          title={watched ? "WATCHLIST登録済み" : "WATCHLISTに追加"}
+        >
+          <Star size={17} fill={watched ? "currentColor" : "none"}/>
+        </button>
+      </td>
+    </tr>
+  })}</tbody></table></div></Panel>
 }
 
-function ChartPage({summary,ticker,setTicker,rows,addWatch}){
+function ChartPage({summary,ticker,setTicker,rows,watchBoard,addWatch}){
   const target=summary.find(r=>r.Ticker===ticker) || {};
+  const watched=isWatched(target, watchBoard);
   const pts=rows.map((r,i)=>({x:i,y:num(r.Close)})).filter(p=>p.y!==null);
   const ys=pts.map(p=>p.y); const min=Math.min(...ys,0), max=Math.max(...ys,1);
   const poly=pts.map(p=>`${(p.x/Math.max(pts.length-1,1))*100},${95-((p.y-min)/Math.max(max-min,1))*85}`).join(" ");
   return <><Panel title="チャート">
     <div className="chartControls"><select value={ticker} onChange={e=>setTicker(e.target.value)}>
       {summary.slice(0,200).map(r=><option key={r.Ticker} value={r.Ticker}>{r["証券コード"]} {r["銘柄名"]}</option>)}
-    </select><button className="mini" onClick={()=>addWatch(target)}>⭐ ウォッチ追加</button></div>
+    </select><button className={`mini watchTextButton ${watched ? "watched" : ""}`} onClick={()=>!watched && addWatch(target)} disabled={watched}>
+      <Star size={16} fill={watched ? "currentColor" : "none"}/>{watched ? "WATCHLIST登録済み" : "ウォッチ追加"}
+    </button></div>
     <div className="chartBox">{pts.length?<svg viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points={poly} fill="none" stroke="currentColor" strokeWidth="1.5"/></svg>:<span>チャートデータなし</span>}</div>
   </Panel></>
 }
