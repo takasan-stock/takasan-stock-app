@@ -13,6 +13,7 @@ async function api(path, options) {
 }
 
 const num = (v) => {
+  if (v === null || v === undefined || String(v).trim() === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
@@ -40,6 +41,7 @@ function App() {
   const [selectedTicker, setSelectedTicker] = useState("");
   const [chart, setChart] = useState([]);
   const [chartInfo, setChartInfo] = useState({source:null, reason:null});
+  const [stockContext, setStockContext] = useState({row:{},sources:{summary:false,weekly:false}});
 
   const reload = async () => {
     setLoading(true);
@@ -59,15 +61,24 @@ function App() {
 
   useEffect(() => {
     if (!selectedTicker) return;
-    api(`/api/chart/${encodeURIComponent(selectedTicker)}?period=2y`)
-      .then((r) => {
+    Promise.allSettled([
+      api(`/api/chart/${encodeURIComponent(selectedTicker)}?period=2y`),
+      api(`/api/stock-context/${encodeURIComponent(selectedTicker)}`),
+    ]).then(([chartResult,contextResult])=>{
+      if(chartResult.status==="fulfilled"){
+        const r=chartResult.value;
         setChart(r.rows || []);
         setChartInfo({source:r.source || null, reason:r.unavailable_reason || null});
-      })
-      .catch((e) => {
+      }else{
         setChart([]);
-        setChartInfo({source:null, reason:String(e?.message || "chart fetch failed")});
-      });
+        setChartInfo({source:null, reason:String(chartResult.reason?.message || "chart fetch failed")});
+      }
+      if(contextResult.status==="fulfilled"){
+        setStockContext(contextResult.value || {row:{},sources:{summary:false,weekly:false}});
+      }else{
+        setStockContext({row:{},sources:{summary:false,weekly:false}});
+      }
+    });
   }, [selectedTicker]);
 
   const earlyTop = useMemo(() => early.slice(0,20), [early]);
@@ -131,7 +142,7 @@ function App() {
         {page==="early" && <EarlyPage rows={earlyTop} watchBoard={watchBoard} addWatch={addWatch}/>}
         {page==="watch" && <WatchPage rows={watchBoard} saveMemo={saveMemo} removeWatch={removeWatch}/>}
         {page==="ranking" && <RankingPage rows={summary} watchBoard={watchBoard} addWatch={addWatch}/>}
-        {page==="chart" && <ChartPage summary={summary} earlyRows={early} ticker={selectedTicker} setTicker={setSelectedTicker} rows={chart} chartInfo={chartInfo} watchBoard={watchBoard} addWatch={addWatch}/>} 
+        {page==="chart" && <ChartPage summary={summary} earlyRows={early} stockContext={stockContext} ticker={selectedTicker} setTicker={setSelectedTicker} rows={chart} chartInfo={chartInfo} watchBoard={watchBoard} addWatch={addWatch}/>} 
       </>}
     </main>
   </div>;
@@ -486,18 +497,18 @@ function pctDiff(value, base){
 }
 
 function statusTone(status){
-  return String(status||"WAIT").toLowerCase();
+  return String(status||"DATA").toLowerCase();
 }
 
 
 function entryAssessment(row, chartRows, timeframe){
-  const rank=String(row?.["初動ランク"]||"");
-  const stage=String(row?.["長期ステージ"]||"");
+  const rank=String(row?.["初動ランク"]||"").trim();
+  const stage=String(row?.["長期ステージ"]||"").trim();
   const rr=num(row?.["RR目安"]);
   const stop=num(row?.["実戦想定損切り距離%"]);
-  const reversal=String(row?.["反転確認"]||"");
-  const settle=String(row?.["反転定着"]||"");
-  const shape=String(row?.["EARLY形状判定"]||"");
+  const reversal=String(row?.["反転確認"]||"").trim();
+  const settle=String(row?.["反転定着"]||"").trim();
+  const shape=String(row?.["EARLY形状判定"]||"").trim();
   const close=num(chartRows?.[chartRows.length-1]?.Close);
 
   const fast=lastSma(chartRows||[],timeframe==="weekly"?5:21);
@@ -507,25 +518,42 @@ function entryAssessment(row, chartRows, timeframe){
   const priceHint=timeframe==="weekly"?"週足終値がMA5以上":"日足終値がMA21以上";
   const trendHint=timeframe==="weekly"?"MA5≧MA40":"MA21≧MA200";
 
+  const check=(label,available,pass,value,hint)=>({
+    label,
+    available:Boolean(available),
+    pass:Boolean(available) ? Boolean(pass) : null,
+    value:Boolean(available) ? value : "N/A",
+    hint:Boolean(available) ? hint : "元データ未取得",
+  });
+
   const checks=[
-    {label:"初動ランク",pass:["S","A"].includes(rank),value:rank||"—",hint:"S / A"},
-    {label:"長期ステージ",pass:stage==="EARLY_STAGE_OK",value:stage||"—",hint:"EARLY_STAGE_OK"},
-    {label:"RR",pass:rr!==null && rr>=3,value:rr!==null?rr.toFixed(2):"—",hint:"3.0以上"},
-    {label:"損切り距離",pass:stop!==null && stop<=5,value:stop!==null?`${stop.toFixed(1)}%`:"—",hint:"5%以内"},
-    {label:"反転",pass:reversal.includes("確認"),value:reversal||"—",hint:"反転確認"},
-    {label:"定着",pass:settle.includes("確認"),value:settle||"—",hint:"定着確認"},
-    {label:"形状",pass:shape.includes("適合"),value:shape||"—",hint:"EARLY適合"},
-    {label:priceLabel,pass:close!==null && fast!==null && close>=fast,value:(close!==null&&fast!==null)?`${((close/fast-1)*100).toFixed(1)}%`:"—",hint:priceHint},
-    {label:trendLabel,pass:fast!==null && slow!==null && fast>=slow,value:(fast!==null&&slow!==null)?(fast>=slow?"上向き":"下向き"):"—",hint:trendHint},
+    check("初動ランク",rank,["S","A"].includes(rank),rank,"S / A"),
+    check("長期ステージ",stage,stage==="EARLY_STAGE_OK",stage,"EARLY_STAGE_OK"),
+    check("RR",rr!==null,rr!==null&&rr>=3,rr!==null?rr.toFixed(2):"N/A","3.0以上"),
+    check("損切り距離",stop!==null,stop!==null&&stop<=5,stop!==null?`${stop.toFixed(1)}%`:"N/A","5%以内"),
+    check("反転",reversal,reversal.includes("確認"),reversal,"反転確認"),
+    check("定着",settle,settle.includes("確認"),settle,"定着確認"),
+    check("形状",shape,shape.includes("適合"),shape,"EARLY適合"),
+    check(priceLabel,close!==null&&fast!==null,close!==null&&fast!==null&&close>=fast,(close!==null&&fast!==null)?`${((close/fast-1)*100).toFixed(1)}%`:"N/A",priceHint),
+    check(trendLabel,fast!==null&&slow!==null,fast!==null&&slow!==null&&fast>=slow,(fast!==null&&slow!==null)?(fast>=slow?"上向き":"下向き"):"N/A",trendHint),
   ];
 
-  const passed=checks.filter(c=>c.pass).length;
-  const corePassed=checks.slice(0,7).filter(c=>c.pass).length;
-  const status=(corePassed===7 && passed>=8)?"READY":(corePassed>=5 && passed>=6)?"PREP":"WAIT";
-  return {status,passed,total:checks.length,checks,fast,slow,close};
+  const availableChecks=checks.filter(c=>c.available);
+  const passed=availableChecks.filter(c=>c.pass).length;
+  const failed=availableChecks.filter(c=>!c.pass).length;
+  const unknown=checks.filter(c=>!c.available).length;
+  const core=checks.slice(0,7);
+  const coreAvailable=core.filter(c=>c.available).length;
+  const corePassed=core.filter(c=>c.available&&c.pass).length;
+
+  let status="DATA";
+  if(coreAvailable>=5){
+    status=(coreAvailable===7 && corePassed===7 && passed>=8)?"READY":(corePassed>=5 && passed>=6)?"PREP":"WAIT";
+  }
+  return {status,passed,failed,available:availableChecks.length,total:checks.length,unknown,checks,fast,slow,close};
 }
 
-function ChartPage({summary,earlyRows,ticker,setTicker,rows,chartInfo,watchBoard,addWatch}){
+function ChartPage({summary,earlyRows,stockContext,ticker,setTicker,rows,chartInfo,watchBoard,addWatch}){
   const [timeframe,setTimeframe]=useState("daily");
   const weeklyRows=useMemo(()=>aggregateWeekly(rows),[rows]);
   const chartRows=timeframe==="weekly"?weeklyRows:rows;
@@ -533,7 +561,7 @@ function ChartPage({summary,earlyRows,ticker,setTicker,rows,chartInfo,watchBoard
   const baseTarget=summary.find(r=>r.Ticker===ticker) || {};
   const earlyTarget=earlyRows.find(r=>r.Ticker===ticker || String(r["証券コード"]||"")===String(baseTarget["証券コード"]||"")) || {};
   const watchTarget=watchBoard.find(r=>r.Ticker===ticker || String(r["証券コード"]||"")===String(baseTarget["証券コード"]||"")) || {};
-  const target={...baseTarget,...earlyTarget,...watchTarget};
+  const target={...baseTarget,...(stockContext?.row||{}),...earlyTarget,...watchTarget};
   const watched=isWatched(target, watchBoard);
   const ys=visibleRows.map(r=>num(r.Close)).filter(v=>v!==null);
   const min=ys.length?Math.min(...ys):null, max=ys.length?Math.max(...ys):null;
@@ -552,7 +580,8 @@ function ChartPage({summary,earlyRows,ticker,setTicker,rows,chartInfo,watchBoard
   const weeklyMa5=lastSma(weeklyRows,5);
   const weeklyMa40=lastSma(weeklyRows,40);
 
-  const activeUnmet=assessment.checks.filter(c=>!c.pass);
+  const activeUnmet=assessment.checks.filter(c=>c.available && !c.pass);
+  const activeUnknown=assessment.checks.filter(c=>!c.available);
   const watchIndex=watchBoard.findIndex(r=>r.Ticker===ticker || String(r["証券コード"]||"")===String(target["証券コード"]||""));
   const prevWatch=(watchIndex>=0 && watchBoard.length>1)?watchBoard[(watchIndex-1+watchBoard.length)%watchBoard.length]:null;
   const nextWatch=(watchIndex>=0 && watchBoard.length>1)?watchBoard[(watchIndex+1)%watchBoard.length]:null;
@@ -595,7 +624,8 @@ function ChartPage({summary,earlyRows,ticker,setTicker,rows,chartInfo,watchBoard
         <span className="eyebrow">未達条件 / {timeframe==="weekly"?"週足":"日足"}</span>
         {activeUnmet.length
           ? <div className="unmetChips">{activeUnmet.slice(0,4).map((c,i)=><span key={i}>{c.label}</span>)}{activeUnmet.length>4&&<span>+{activeUnmet.length-4}</span>}</div>
-          : <strong className="allClear">ALL CLEAR</strong>}
+          : assessment.available>0 ? <strong className="allClear">ALL CLEAR</strong> : null}
+        {activeUnknown.length>0 && <div className="unknownChips"><span>未取得 {activeUnknown.length}</span>{!stockContext?.sources?.weekly&&<span>週足転換Hなし</span>}</div>}
       </div>
       {watchIndex>=0 && <div className="watchStepper">
         <span className="eyebrow">WATCHLIST {watchIndex+1} / {watchBoard.length}</span>
@@ -615,12 +645,13 @@ function ChartPage({summary,earlyRows,ticker,setTicker,rows,chartInfo,watchBoard
         </div>
         <div className="entryStatus">
           <span className={`entryStatusBadge ${assessment.status.toLowerCase()}`}>{assessment.status}</span>
-          <strong>{assessment.passed}<small> / {assessment.total}</small></strong>
+          <strong>{assessment.passed}<small> / {assessment.available}</small></strong>
+          {assessment.unknown>0 && <em className="entryUnknownCount">未取得 {assessment.unknown}</em>}
         </div>
       </div>
       <div className="entryCheckGrid">
-        {assessment.checks.map((c,i)=><div className={`entryCheckItem ${c.pass?"pass":"fail"}`} key={i}>
-          <span className="entryCheckIcon">{c.pass?"✓":"!"}</span>
+        {assessment.checks.map((c,i)=><div className={`entryCheckItem ${!c.available?"unknown":c.pass?"pass":"fail"}`} key={i}>
+          <span className="entryCheckIcon">{!c.available?"—":c.pass?"✓":"!"}</span>
           <div>
             <b>{c.label}</b>
             <strong>{c.value}</strong>
@@ -633,6 +664,7 @@ function ChartPage({summary,earlyRows,ticker,setTicker,rows,chartInfo,watchBoard
         <span>{timeframe==="weekly"?"MA5":"MA21"} {assessment.fast!==null?assessment.fast.toLocaleString(undefined,{maximumFractionDigits:1}):"—"}</span>
         <span>{timeframe==="weekly"?"MA40":"MA200"} {assessment.slow!==null?assessment.slow.toLocaleString(undefined,{maximumFractionDigits:1}):"—"}</span>
         <span>終値 {assessment.close!==null?assessment.close.toLocaleString(undefined,{maximumFractionDigits:1}):"—"}</span>
+        <span>EARLY詳細 {stockContext?.sources?.weekly?"週足転換H":"未取得"}</span>
       </div>
     </section>
 
