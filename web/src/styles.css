@@ -686,3 +686,24 @@ td small{color:#547088;font-size:12.5px}
   font-size:11.5px;
   font-weight:700;
 }
+
+
+/* Chart navigation loading state */
+.chartLoading{
+  height:100%;
+  display:grid;
+  place-content:center;
+  justify-items:center;
+  gap:10px;
+  color:#688196;
+}
+.chartLoading span{
+  width:30px;
+  height:30px;
+  border-radius:50%;
+  border:3px solid #dce8f1;
+  border-top-color:#3a94cf;
+  animation:chartSpin .8s linear infinite;
+}
+.chartLoading b{font-size:13px}
+@keyframes chartSpin{to{transform:rotate(360deg)}}
