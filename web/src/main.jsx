@@ -480,6 +480,16 @@ function lastSma(rows, period){
   return vals.reduce((a,b)=>a+b,0)/period;
 }
 
+function pctDiff(value, base){
+  if(value===null || base===null || base===0) return null;
+  return ((value/base)-1)*100;
+}
+
+function statusTone(status){
+  return String(status||"WAIT").toLowerCase();
+}
+
+
 function entryAssessment(row, chartRows, timeframe){
   const rank=String(row?.["初動ランク"]||"");
   const stage=String(row?.["長期ステージ"]||"");
@@ -531,7 +541,22 @@ function ChartPage({summary,earlyRows,ticker,setTicker,rows,chartInfo,watchBoard
   const latest=chartRows.length?chartRows[chartRows.length-1]:null;
   const prev=chartRows.length>1?num(chartRows[chartRows.length-2]?.Close):null;
   const change=(last!==null && prev!==null && prev!==0)?((last-prev)/prev)*100:null;
-  const assessment=entryAssessment(target,chartRows,timeframe);
+  const dailyAssessment=entryAssessment(target,rows,"daily");
+  const weeklyAssessment=entryAssessment(target,weeklyRows,"weekly");
+  const assessment=timeframe==="weekly"?weeklyAssessment:dailyAssessment;
+
+  const dailyClose=num(rows?.[rows.length-1]?.Close);
+  const dailyMa21=lastSma(rows,21);
+  const dailyMa200=lastSma(rows,200);
+  const weeklyClose=num(weeklyRows?.[weeklyRows.length-1]?.Close);
+  const weeklyMa5=lastSma(weeklyRows,5);
+  const weeklyMa40=lastSma(weeklyRows,40);
+
+  const activeUnmet=assessment.checks.filter(c=>!c.pass);
+  const watchIndex=watchBoard.findIndex(r=>r.Ticker===ticker || String(r["証券コード"]||"")===String(target["証券コード"]||""));
+  const prevWatch=(watchIndex>=0 && watchBoard.length>1)?watchBoard[(watchIndex-1+watchBoard.length)%watchBoard.length]:null;
+  const nextWatch=(watchIndex>=0 && watchBoard.length>1)?watchBoard[(watchIndex+1)%watchBoard.length]:null;
+  const jumpWatch=(row)=>{ if(row?.Ticker) setTicker(row.Ticker); };
   return <>
     <section className="chartHero">
       <div>
@@ -551,6 +576,34 @@ function ChartPage({summary,earlyRows,ticker,setTicker,rows,chartInfo,watchBoard
           {min!==null && max!==null ? ` / ${timeframe==="weekly"?"60週":"6M"} ${min.toLocaleString()} - ${max.toLocaleString()}` : ""}
         </small>
       </div>
+    </section>
+
+    <section className="decisionStrip">
+      <button className={`decisionTf ${timeframe==="daily"?"active":""}`} onClick={()=>setTimeframe("daily")}>
+        <span>日足</span>
+        <strong className={`decisionStatus ${statusTone(dailyAssessment.status)}`}>{dailyAssessment.status}</strong>
+        <small>終値/MA21 {pctDiff(dailyClose,dailyMa21)!==null?`${pctDiff(dailyClose,dailyMa21)>=0?"+":""}${pctDiff(dailyClose,dailyMa21).toFixed(1)}%`:"—"}</small>
+        <small>MA21/MA200 {pctDiff(dailyMa21,dailyMa200)!==null?`${pctDiff(dailyMa21,dailyMa200)>=0?"+":""}${pctDiff(dailyMa21,dailyMa200).toFixed(1)}%`:"—"}</small>
+      </button>
+      <button className={`decisionTf ${timeframe==="weekly"?"active":""}`} onClick={()=>setTimeframe("weekly")}>
+        <span>週足</span>
+        <strong className={`decisionStatus ${statusTone(weeklyAssessment.status)}`}>{weeklyAssessment.status}</strong>
+        <small>終値/MA5 {pctDiff(weeklyClose,weeklyMa5)!==null?`${pctDiff(weeklyClose,weeklyMa5)>=0?"+":""}${pctDiff(weeklyClose,weeklyMa5).toFixed(1)}%`:"—"}</small>
+        <small>MA5/MA40 {pctDiff(weeklyMa5,weeklyMa40)!==null?`${pctDiff(weeklyMa5,weeklyMa40)>=0?"+":""}${pctDiff(weeklyMa5,weeklyMa40).toFixed(1)}%`:"—"}</small>
+      </button>
+      <div className="decisionUnmet">
+        <span className="eyebrow">未達条件 / {timeframe==="weekly"?"週足":"日足"}</span>
+        {activeUnmet.length
+          ? <div className="unmetChips">{activeUnmet.slice(0,4).map((c,i)=><span key={i}>{c.label}</span>)}{activeUnmet.length>4&&<span>+{activeUnmet.length-4}</span>}</div>
+          : <strong className="allClear">ALL CLEAR</strong>}
+      </div>
+      {watchIndex>=0 && <div className="watchStepper">
+        <span className="eyebrow">WATCHLIST {watchIndex+1} / {watchBoard.length}</span>
+        <div>
+          <button className="mini" onClick={()=>jumpWatch(prevWatch)}>← 前へ</button>
+          <button className="mini" onClick={()=>jumpWatch(nextWatch)}>次へ →</button>
+        </div>
+      </div>}
     </section>
 
     <section className={`entryCheckPanel entry-${assessment.status.toLowerCase()}`}>
