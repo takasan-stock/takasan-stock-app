@@ -595,6 +595,7 @@ def build_scores(summary: pd.DataFrame, earnings: pd.DataFrame) -> pd.DataFrame:
         r["5日出来高倍率"] = m.get("5日出来高倍率", "")
         r["上昇日出来高比率%"] = m.get("上昇日出来高比率%", "")
         r["RS母集団"] = m.get("RS母集団", "")
+        r["価格データ源"] = m.get("価格データ源", "")
         r["主力シグナル"] = main_signal
         r["主力品質"] = round(float(main_signal_score), 1)
         r["実戦スコア"] = int(round(max(0, min(100, practical_score))))
@@ -617,7 +618,7 @@ def build_scores(summary: pd.DataFrame, earnings: pd.DataFrame) -> pd.DataFrame:
         "証券コード", "Ticker", "銘柄名", "終値",
         "実戦スコア", "実戦ステータス", "主力シグナル", "主力品質", "過熱判定", "過熱ペナルティ",
         "総合スコア", "総合ランク", "スコアバージョン", "スコア更新日時",
-        "RS Rating", "出来高モメンタム", "テクニカル総合", "パターン構造", "価格品質",
+        "RS Rating", "出来高モメンタム", "価格データ源", "テクニカル総合", "パターン構造", "価格品質",
         "TURNAROUND品質", "PULLBACK品質", "BREAKOUT品質",
         "20MA乖離%", "50MA乖離%", "MA傾き", "52週高値距離%", "20日レンジ位置",
         "20日ブレイク距離%", "EARNINGSスコア",
