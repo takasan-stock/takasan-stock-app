@@ -1,0 +1,84 @@
+# Prompt for ChatGPT Sites
+
+Use @Sites to create a new website named **Takasan Stock Hunter Sites v1**.
+
+Use the GitHub repository `takasan-stock/takasan-stock-app` as the source reference. Reproduce the current frontend under `web/` as faithfully as possible.
+
+Use the branch `sites-v1-migration` for migration notes and constraints. Use the current `main` branch implementation under `web/` as the UI behavior reference.
+
+Do not modify the existing Render API or any existing production service.
+
+Use this API as the backend:
+
+```
+https://takasan-stock-hunter-api-ue7i.onrender.com
+```
+
+Required pages:
+
+- TODAY
+- EARLY HUNTER
+- WATCHLIST
+- RANKING
+- CHART
+
+Preserve the current light visual design and current workflows.
+
+CHART requirements:
+
+- Default = 日足
+- Timeframes = 日足 / 週足 only
+- 日足 MA = 5 / 21 / 200
+- 週足 MA = 5 / 40
+- Candlesticks
+- Volume
+- Price axis
+- Time axis
+- Crosshair
+- Zoom and scroll
+- Daily/weekly decision summary
+- ENTRY CHECK
+- WATCHLIST previous / next navigation
+
+ENTRY CHECK must distinguish:
+
+- green = condition passed
+- red = data exists but condition failed
+- gray = source data unavailable / N/A
+
+Never convert missing values to zero.
+
+TODAY requirements:
+
+- Preserve TODAY ACTION QUEUE
+- CHART button must open the exact selected ticker
+- WATCHLIST registration state must remain synchronized with the API
+
+WATCHLIST requirements:
+
+- gold filled star = registered
+- outline star = not registered
+- preserve memo saving
+- preserve delete confirmation
+
+Do not change:
+
+- Google Sheets
+- J-Quants
+- Render API
+- API Secrets
+- existing database/storage
+- EARLY screening logic
+- Entry Hunter core logic
+- WATCHLIST persistence
+
+Create a private preview only.
+Do not publish or deploy until I explicitly approve it.
+
+After the preview builds, report:
+1. which pages were reproduced
+2. which API endpoints are connected
+3. any feature that could not be reproduced exactly
+4. whether WATCHLIST writes work
+5. whether daily/weekly CHART switching works
+6. whether ENTRY CHECK distinguishes pass/fail/N/A correctly
