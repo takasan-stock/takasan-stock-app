@@ -94,7 +94,13 @@ def _save_watch(df: pd.DataFrame):
 
 @app.get("/api/health")
 def health():
-    return {"ok": bool(SHEET_ID and os.getenv("GCP_SERVICE_ACCOUNT_JSON")), "service":"takasan-stock-hunter-api"}
+    return {
+        "ok": bool(SHEET_ID and os.getenv("GCP_SERVICE_ACCOUNT_JSON")),
+        "service":"takasan-stock-hunter-api",
+        "jquants_configured": bool(os.getenv("JQUANTS_API_KEY","").strip()),
+        "chart_primary_source": "J-Quants",
+        "chart_fallback_source": "Yahoo Finance",
+    }
 
 @app.get("/api/summary")
 def summary():
@@ -238,7 +244,13 @@ def chart(ticker: str, period: str="6mo"):
             df = jq.daily_bars(ticker, _chart_period_start(period), date.today())
             rows = _chart_rows_from_df(df)
             if rows:
-                return {"rows": rows, "source": "J-Quants"}
+                return {
+                    "rows": rows,
+                    "source": "J-Quants",
+                    "primary_source": "J-Quants",
+                    "fallback_used": False,
+                    "fallback_reason": None,
+                }
             errors.append("J-Quants: empty")
         else:
             errors.append("J-Quants: not configured")
@@ -251,7 +263,13 @@ def chart(ticker: str, period: str="6mo"):
         df = yf.download(ticker, period=period, interval="1d", auto_adjust=True, progress=False)
         rows = _chart_rows_from_df(df)
         if rows:
-            return {"rows": rows, "source": "Yahoo Finance"}
+            return {
+                "rows": rows,
+                "source": "Yahoo Finance",
+                "primary_source": "J-Quants",
+                "fallback_used": True,
+                "fallback_reason": " / ".join(errors),
+            }
         errors.append("Yahoo Finance: empty")
     except Exception as exc:
         errors.append(f"Yahoo Finance: {type(exc).__name__}")
