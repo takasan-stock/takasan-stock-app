@@ -82,3 +82,23 @@ After the preview builds, report:
 4. whether WATCHLIST writes work
 5. whether daily/weekly CHART switching works
 6. whether ENTRY CHECK distinguishes pass/fail/N/A correctly
+
+
+## Browser / preview safety instruction
+
+Do not inspect, infer, copy, or navigate using the user's current browser URL.
+
+Do not use browser history, address-bar inspection, or an inferred local/current URL to locate the Site.
+
+Work only from:
+- the ChatGPT Sites project context created in this task,
+- the connected GitHub repository,
+- and the explicit Render API base written above.
+
+If opening the private preview requires a browser action that is blocked by a safety confirmation:
+1. do not retry by guessing the URL,
+2. do not navigate to an inferred URL,
+3. leave the Site saved as a private draft,
+4. report the exact blocked action and the exact UI step the user should click manually.
+
+A browser safety block must not prevent completing code generation, API wiring, or saving the private Site draft.
