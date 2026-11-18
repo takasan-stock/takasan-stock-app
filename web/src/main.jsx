@@ -149,7 +149,7 @@ function App() {
       </button>)}
       <div className="sidebarFooter">
         <span className={health?.ok ? "dot ok":"dot"}></span>
-        <span>{health?.ok ? "DATA ONLINE":"CHECK DATA"}</span>
+        <span>{health?.ok ? `DATA ONLINE · ${health?.jquants_configured?"JQ":"CHECK JQ"}`:"CHECK DATA"}</span>
       </div>
     </aside>
 
@@ -160,7 +160,7 @@ function App() {
       </header>
 
       {loading ? <div className="loading">データを読み込み中...</div> : <>
-        {page==="home" && <HomePage early={earlyTop} watchBoard={watchBoard} summary={summary} addWatch={addWatch} openWatch={()=>setPage("watch")} openChart={openChart}/>} 
+        {page==="home" && <HomePage early={earlyTop} watchBoard={watchBoard} summary={summary} health={health} addWatch={addWatch} openWatch={()=>setPage("watch")} openChart={openChart}/>} 
         {page==="early" && <EarlyPage rows={earlyTop} watchBoard={watchBoard} addWatch={addWatch}/>}
         {page==="watch" && <WatchPage rows={watchBoard} saveMemo={saveMemo} removeWatch={removeWatch}/>}
         {page==="ranking" && <RankingPage rows={summary} watchBoard={watchBoard} addWatch={addWatch}/>}
@@ -174,7 +174,39 @@ function pageTitle(page){return ({home:"TODAY COMMAND CENTER",early:"EARLY HUNTE
 
 function Kpi({label,value,sub}){return <div className="kpi"><span>{label}</span><strong>{value}</strong><small>{sub}</small></div>}
 
-function HomePage({early,watchBoard,summary,addWatch,openWatch,openChart}){
+function SourceBadge({source,compact=false}){
+  const raw=String(source||"").trim();
+  const jq=raw.toLowerCase().includes("j-quants");
+  const yahoo=raw.toLowerCase().includes("yahoo");
+  const label=jq?"J-Quants":yahoo?"Yahoo補完":"未記録";
+  return <span className={`sourceBadge ${jq?"jq":yahoo?"yahoo":"unknown"} ${compact?"compact":""}`}>{label}</span>;
+}
+
+function DataSourceStrip({health,rows=[]}){
+  const jqConfigured=Boolean(health?.jquants_configured);
+  const sources=rows.map(r=>String(r?.["価格データ源"]||"").trim()).filter(Boolean);
+  const jqCount=sources.filter(s=>s.toLowerCase().includes("j-quants")).length;
+  const yahooCount=sources.filter(s=>s.toLowerCase().includes("yahoo")).length;
+  const pending=Math.max(0,rows.length-jqCount-yahooCount);
+  return <section className="dataSourceStrip">
+    <div>
+      <span className="eyebrow">MARKET DATA</span>
+      <strong>PRIMARY: {health?.chart_primary_source || "J-Quants"}</strong>
+      <small>FALLBACK: {health?.chart_fallback_source || "Yahoo Finance"}</small>
+    </div>
+    <div className={`sourceHealth ${jqConfigured?"ok":"warn"}`}>
+      <span>{jqConfigured?"●":"!"}</span>
+      <b>{jqConfigured?"J-Quants 接続済み":"J-Quants 未設定"}</b>
+    </div>
+    {rows.length>0 && <div className="sourceCounts">
+      <span>J-Quants <b>{jqCount}</b></span>
+      <span>Yahoo補完 <b>{yahooCount}</b></span>
+      <span>未記録 <b>{pending}</b></span>
+    </div>}
+  </section>;
+}
+
+function HomePage({early,watchBoard,summary,health,addWatch,openWatch,openChart}){
   const idealCount = early.filter(ideal).length;
   const entryCount = watchBoard.filter(r=>r["監視ステータス"]==="🔥 ENTRY確認").length;
 
@@ -199,6 +231,7 @@ function HomePage({early,watchBoard,summary,addWatch,openWatch,openChart}){
     .slice(0,6);
 
   return <>
+    <DataSourceStrip health={health}/>
     <section className="kpis">
       <Kpi label="⭐ 理想本命" value={idealCount} sub="EARLY最優先"/>
       <Kpi label="🔥 ENTRY確認" value={entryCount} sub="ウォッチ昇格"/>
@@ -255,6 +288,7 @@ function EarlyPage({rows,watchBoard,addWatch}){
   const watchedCount=rows.filter(r=>isWatched(r,watchBoard)).length;
   const sCount=rows.filter(r=>String(r["初動ランク"]||"")==="S").length;
   return <>
+    <DataSourceStrip health={health} rows={rows}/>
     <section className="pageSummary">
       <Kpi label="⭐ 理想本命" value={idealCount} sub="最優先候補"/>
       <Kpi label="★ WATCHLIST" value={watchedCount} sub="登録済み"/>
@@ -317,7 +351,7 @@ function WatchPage({rows,saveMemo,removeWatch}) {
   </>
 }
 
-function RankingPage({rows,watchBoard,addWatch}) {
+function RankingPage({rows,health,watchBoard,addWatch}) {
   const sorted=[...rows].sort((a,b)=>(num(b["総合スコア"])||0)-(num(a["総合スコア"])||0)).slice(0,50);
   const watchedCount=sorted.filter(r=>isWatched(r,watchBoard)).length;
   const topScore=num(sorted[0]?.["総合スコア"]) ?? "—";
@@ -328,7 +362,7 @@ function RankingPage({rows,watchBoard,addWatch}) {
       <Kpi label="📊 表示件数" value={sorted.length} sub="総合ランキング"/>
     </section>
     <Panel title="総合ランキング"><div className="tableWrap"><table><thead><tr>
-      <th>#</th><th>銘柄</th><th>総合</th><th>ランク</th><th>実戦</th><th>RS</th><th>出来高M</th><th>主力</th><th></th>
+      <th>#</th><th>銘柄</th><th>総合</th><th>ランク</th><th>実戦</th><th>RS</th><th>出来高M</th><th>主力</th><th>DATA</th><th></th>
     </tr></thead><tbody>{sorted.map((r,i)=>{
       const watched = isWatched(r, watchBoard);
       return <tr key={r.Ticker||i} className={i<3?"topRank":""}>
@@ -336,6 +370,7 @@ function RankingPage({rows,watchBoard,addWatch}) {
       <td><b>{r["証券コード"]}</b><br/><small>{r["銘柄名"]}</small></td>
       <td>{r["総合スコア"]}</td><td><Badge text={r["総合ランク"]}/></td><td>{r["実戦スコア"]}</td>
       <td>{r["RS Rating"]}</td><td>{r["出来高モメンタム"]}</td><td>{r["主力シグナル"]}</td>
+      <td><SourceBadge source={r["価格データ源"]} compact/></td>
       <td>
         <button
           className={`mini watchToggle ${watched ? "watched" : ""}`}
