@@ -22,6 +22,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import gspread
+
+from jquants_prices import download_jquants_histories
 from google.oauth2.service_account import Credentials
 
 
@@ -348,42 +350,70 @@ def price_technical_quality(df: pd.DataFrame) -> dict:
     }
 
 def fetch_market_scores(tickers: list[str]) -> pd.DataFrame:
-    """候補銘柄をまとめて取得し、RS原点と出来高モメンタムを算出。"""
+    """候補銘柄の市場スコアをJ-Quants優先で算出。欠損銘柄のみYahooで補完。"""
     tickers = [t for t in dict.fromkeys(tickers) if t]
+    if not tickers:
+        return pd.DataFrame()
+
+    start_date = (pd.Timestamp.today().normalize() - pd.DateOffset(months=13)).date()
+    histories = {}
+    try:
+        histories = download_jquants_histories(tickers, start_date)
+    except Exception as e:
+        print(
+            f"::warning::J-Quants市場スコア取得失敗: {type(e).__name__}: {e}",
+            flush=True,
+        )
+        histories = {}
+
+    missing = [t for t in tickers if t not in histories or histories[t] is None or histories[t].empty]
+    if missing:
+        print(
+            f"[市場スコア] J-Quants成功 {len(histories)}/{len(tickers)} / "
+            f"Yahoo補完 {len(missing)}",
+            flush=True,
+        )
+        for start in range(0, len(missing), 80):
+            chunk = missing[start:start + 80]
+            try:
+                data = yf.download(
+                    chunk,
+                    period="13mo",
+                    interval="1d",
+                    auto_adjust=True,
+                    progress=False,
+                    group_by="ticker",
+                    threads=True,
+                )
+            except Exception as e:
+                print(f"市場スコアYahoo補完失敗 chunk={start}: {e}", flush=True)
+                continue
+
+            single = len(chunk) == 1
+            for ticker in chunk:
+                df = _extract_one(data, ticker, single)
+                if df is not None and not df.empty:
+                    df.attrs["price_source"] = "Yahoo Finance"
+                    histories[ticker] = df
+
     records = []
-
-    for start in range(0, len(tickers), 80):
-        chunk = tickers[start:start + 80]
-        try:
-            data = yf.download(
-                chunk,
-                period="13mo",
-                interval="1d",
-                auto_adjust=True,
-                progress=False,
-                group_by="ticker",
-                threads=True,
-            )
-        except Exception as e:
-            print(f"市場スコア取得失敗 chunk={start}: {e}", flush=True)
-            continue
-
-        single = len(chunk) == 1
-        for ticker in chunk:
-            df = _extract_one(data, ticker, single)
-            close = _safe_series(df, "Close")
-            rs_raw = weighted_price_strength(close)
-            vol_score, latest_vr, five_vr, up_share = volume_momentum_score(df)
-            tq = price_technical_quality(df)
-            records.append({
-                "Ticker": ticker,
-                "RS原点": rs_raw,
-                "出来高モメンタム": vol_score,
-                "当日出来高倍率": latest_vr,
-                "5日出来高倍率": five_vr,
-                "上昇日出来高比率%": up_share,
-                **tq,
-            })
+    for ticker in tickers:
+        df = histories.get(ticker, pd.DataFrame())
+        close = _safe_series(df, "Close")
+        rs_raw = weighted_price_strength(close)
+        vol_score, latest_vr, five_vr, up_share = volume_momentum_score(df)
+        tq = price_technical_quality(df)
+        source = getattr(df, "attrs", {}).get("price_source", "") if df is not None else ""
+        records.append({
+            "Ticker": ticker,
+            "価格データ源": source or ("J-Quants" if ticker in histories and not df.empty else ""),
+            "RS原点": rs_raw,
+            "出来高モメンタム": vol_score,
+            "当日出来高倍率": latest_vr,
+            "5日出来高倍率": five_vr,
+            "上昇日出来高比率%": up_share,
+            **tq,
+        })
 
     out = pd.DataFrame(records)
     if out.empty:
@@ -400,7 +430,6 @@ def fetch_market_scores(tickers: list[str]) -> pd.DataFrame:
 
     out["RS母集団"] = n
     return out
-
 
 def weighted_available(parts: list[tuple[float, float]]) -> float:
     valid = [(float(v), float(w)) for v, w in parts if not pd.isna(v)]
