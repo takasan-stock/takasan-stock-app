@@ -707,3 +707,51 @@ td small{color:#547088;font-size:12.5px}
 }
 .chartLoading b{font-size:13px}
 @keyframes chartSpin{to{transform:rotate(360deg)}}
+
+
+/* Market data source visibility */
+.dataSourceStrip{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:10px 12px;
+  margin-bottom:14px;
+  border:1px solid #d7e5ef;
+  border-radius:13px;
+  background:linear-gradient(90deg,#f8fcff,#f4fbf7);
+}
+.dataSourceStrip>div:first-child{display:flex;align-items:baseline;gap:10px;min-width:0}
+.dataSourceStrip strong{font-size:13px;color:#1d4f70}
+.dataSourceStrip small{font-size:11px;color:#73889a}
+.sourceHealth{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  padding:5px 9px;
+  border-radius:999px;
+  font-size:11.5px;
+  white-space:nowrap;
+}
+.sourceHealth.ok{background:#e4f6ec;color:#16744c}
+.sourceHealth.warn{background:#fff1df;color:#9a641b}
+.sourceCounts{display:flex;gap:10px;margin-left:auto;font-size:11px;color:#637b8f;white-space:nowrap}
+.sourceBadge{
+  display:inline-flex;
+  align-items:center;
+  border-radius:999px;
+  padding:5px 8px;
+  font-size:11px;
+  font-weight:800;
+  border:1px solid transparent;
+  white-space:nowrap;
+}
+.sourceBadge.compact{padding:4px 7px;font-size:10.5px}
+.sourceBadge.jq{background:#e5f6ed;color:#17774e;border-color:#c6e9d6}
+.sourceBadge.yahoo{background:#fff1df;color:#9a641b;border-color:#f0d5ad}
+.sourceBadge.unknown{background:#eef3f7;color:#718697;border-color:#dce5eb}
+
+@media(max-width:900px){
+  .dataSourceStrip{align-items:flex-start;flex-wrap:wrap}
+  .dataSourceStrip>div:first-child{width:100%;flex-wrap:wrap}
+  .sourceCounts{margin-left:0}
+}
