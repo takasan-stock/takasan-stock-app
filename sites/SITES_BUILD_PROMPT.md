@@ -102,3 +102,14 @@ If opening the private preview requires a browser action that is blocked by a sa
 4. report the exact blocked action and the exact UI step the user should click manually.
 
 A browser safety block must not prevent completing code generation, API wiring, or saving the private Site draft.
+
+
+## Version 3 retry / cold-start hardening
+
+For the next Sites revision, read and apply:
+
+```
+sites/SITES_V3_RETRY_SPEC.md
+```
+
+This Version 3 change is Sites-only. Do not modify Render API or upstream data systems.
