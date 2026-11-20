@@ -113,3 +113,14 @@ sites/SITES_V3_RETRY_SPEC.md
 ```
 
 This Version 3 change is Sites-only. Do not modify Render API or upstream data systems.
+
+
+## Version 4 embedded preview fallback
+
+If the embedded ChatGPT Sites editor/preview reports API connection failure while Render receives no upstream request, read and apply:
+
+```
+sites/SITES_V4_PREVIEW_FALLBACK_SPEC.md
+```
+
+This keeps Version 3 retry behavior and adds a GET-only direct Render fallback. Do not change Render API.
