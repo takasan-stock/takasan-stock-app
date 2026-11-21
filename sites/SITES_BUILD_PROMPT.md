@@ -212,3 +212,14 @@ sites/SITES_V10_2_WATCHLIST_SYNC_FIX_SPEC.md
 ```
 
 The explicit WATCHLIST sync must never silently no-op. Keep Version 10.1 public Render reads at zero.
+
+
+## Version 13 no health preflight
+
+If explicit WATCHLIST sync reaches an edge 429 on the health preflight before watch-board is attempted, read and apply:
+
+```
+sites/SITES_V13_NO_HEALTH_PREFLIGHT_SPEC.md
+```
+
+Normal user operations should call the target endpoint directly and use /api/health for diagnostics only.
