@@ -157,3 +157,14 @@ sites/SITES_V7_PERSISTENT_CACHE_SPEC.md
 ```
 
 Keep Version 6 network behavior unchanged. Version 7 is a display-resilience layer only.
+
+
+## Version 8 GitHub bootstrap fallback
+
+If first-run local cache is empty and Cloudflare/Render 429 prevents live data, read and apply:
+
+```
+sites/SITES_V8_GITHUB_BOOTSTRAP_SPEC.md
+```
+
+The GitHub bootstrap is public market data only. Never publish WATCHLIST or memo data.
