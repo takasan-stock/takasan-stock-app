@@ -93,19 +93,22 @@ def _chart_rows(df: pd.DataFrame) -> list[dict]:
     return rows
 
 
-def _export_charts(summary_df: pd.DataFrame, generated_at: str) -> int:
+def _export_charts(summary_df: pd.DataFrame, early_df: pd.DataFrame, generated_at: str) -> int:
     jq = JQuantsPriceClient.from_env()
     if jq is None:
         print("JQUANTS_API_KEY is not configured; chart bootstrap skipped", flush=True)
         return 0
 
-    ticker_col = "Ticker" if "Ticker" in summary_df.columns else None
-    if ticker_col is None:
-        print("Ticker column is missing; chart bootstrap skipped", flush=True)
-        return 0
+    tickers = []
+    for frame in (summary_df, early_df):
+        if frame is None or frame.empty or "Ticker" not in frame.columns:
+            continue
+        tickers.extend(str(x).strip() for x in frame["Ticker"].tolist() if str(x).strip())
 
-    tickers = [str(x).strip() for x in summary_df[ticker_col].tolist() if str(x).strip()]
     tickers = list(dict.fromkeys(tickers))
+    if not tickers:
+        print("Ticker column is missing/empty in summary and early; chart bootstrap skipped", flush=True)
+        return 0
     start_date = (pd.Timestamp.now(tz="Asia/Tokyo").normalize() - pd.DateOffset(years=2)).date()
     end_date = pd.Timestamp.now(tz="Asia/Tokyo").date()
 
@@ -157,7 +160,7 @@ def main():
     generated_at = datetime.now(ZoneInfo("Asia/Tokyo")).isoformat(timespec="seconds")
     summary_rows = _records(summary_df)
     early_rows = _records(early_df)
-    chart_count = _export_charts(summary_df, generated_at)
+    chart_count = _export_charts(summary_df, early_df, generated_at)
 
     _write("summary.json", {"rows": summary_rows})
     _write("early.json", {"rows": early_rows})
