@@ -1,0 +1,67 @@
+name: Sites bootstrap snapshot
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "export_sites_bootstrap.py"
+      - ".github/workflows/sites_bootstrap.yml"
+  workflow_run:
+    workflows: ["日本株スクリーナー 定期スキャン"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Python setup
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install snapshot dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy gspread google-auth
+
+      - name: Export public market snapshot
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          SITES_BOOTSTRAP_DIR: /tmp/sites-bootstrap
+        run: python export_sites_bootstrap.py
+
+      - name: Publish snapshot to sites-data branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin sites-data
+          rm -rf /tmp/sites-data
+          git worktree add -B sites-data /tmp/sites-data origin/sites-data
+
+          rm -rf /tmp/sites-data/sites-bootstrap
+          mkdir -p /tmp/sites-data/sites-bootstrap
+          cp -R /tmp/sites-bootstrap/. /tmp/sites-data/sites-bootstrap/
+
+          cd /tmp/sites-data
+          git add sites-bootstrap
+          if git diff --cached --quiet; then
+            echo "Snapshot unchanged."
+            exit 0
+          fi
+
+          git commit -m "data: update Sites bootstrap snapshot"
+          git push origin sites-data
