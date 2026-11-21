@@ -179,3 +179,14 @@ sites/SITES_V9_CHART_BOOTSTRAP_SPEC.md
 ```
 
 GitHub chart snapshots contain public J-Quants OHLCV only. Never include WATCHLIST or personal data.
+
+
+## Version 10 snapshot-primary read/write split
+
+After Version 9 proves GitHub Snapshot can serve TODAY/EARLY/RANKING/CHART during Render 429, read and apply:
+
+```
+sites/SITES_V10_READ_WRITE_SPLIT_SPEC.md
+```
+
+Version 10 makes Snapshot the normal public-market read path and reserves Render primarily for WATCHLIST/private writes.
