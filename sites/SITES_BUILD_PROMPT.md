@@ -201,3 +201,14 @@ sites/SITES_V10_1_STOP_AUTO_RENDER_READS_SPEC.md
 ```
 
 Normal TODAY/EARLY/RANKING/CHART navigation must produce zero Render public-read requests.
+
+
+## Version 10.2 WATCHLIST sync fix
+
+If WATCHLIST同期 produces no Render health/watch request and leaves the UI at 前回同期, read and apply:
+
+```
+sites/SITES_V10_2_WATCHLIST_SYNC_FIX_SPEC.md
+```
+
+The explicit WATCHLIST sync must never silently no-op. Keep Version 10.1 public Render reads at zero.
