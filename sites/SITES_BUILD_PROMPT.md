@@ -124,3 +124,14 @@ sites/SITES_V4_PREVIEW_FALLBACK_SPEC.md
 ```
 
 This keeps Version 3 retry behavior and adds a GET-only direct Render fallback. Do not change Render API.
+
+
+## 429 diagnostics
+
+If Sites returns HTTP 429 before reaching Render, read and apply:
+
+```
+sites/SITES_429_DIAGNOSTICS_SPEC.md
+```
+
+Do not change retry policy for 429 until diagnostics identify the source.
