@@ -18,7 +18,7 @@ jobs:
   export:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout main
@@ -35,12 +35,13 @@ jobs:
       - name: Install snapshot dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy gspread google-auth
+          pip install pandas numpy requests gspread google-auth
 
       - name: Export public market snapshot
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
           SITES_BOOTSTRAP_DIR: /tmp/sites-bootstrap
         run: python export_sites_bootstrap.py
 
