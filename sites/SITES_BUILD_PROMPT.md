@@ -190,3 +190,14 @@ sites/SITES_V10_READ_WRITE_SPLIT_SPEC.md
 ```
 
 Version 10 makes Snapshot the normal public-market read path and reserves Render primarily for WATCHLIST/private writes.
+
+
+## Version 10.1 stop automatic Render public reads
+
+If Version 10 still generates Render requests for summary/early/chart during normal Snapshot use, read and apply:
+
+```
+sites/SITES_V10_1_STOP_AUTO_RENDER_READS_SPEC.md
+```
+
+Normal TODAY/EARLY/RANKING/CHART navigation must produce zero Render public-read requests.
