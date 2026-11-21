@@ -135,3 +135,14 @@ sites/SITES_429_DIAGNOSTICS_SPEC.md
 ```
 
 Do not change retry policy for 429 until diagnostics identify the source.
+
+
+## Version 6 Cloudflare 429 circuit breaker
+
+If Version 5 diagnostics show Cloudflare 429 before Render application logs, read and apply:
+
+```
+sites/SITES_V6_429_COOLDOWN_SPEC.md
+```
+
+Do not add aggressive retries for 429. Use single-flight requests and a 60-second circuit breaker.
