@@ -168,3 +168,14 @@ sites/SITES_V8_GITHUB_BOOTSTRAP_SPEC.md
 ```
 
 The GitHub bootstrap is public market data only. Never publish WATCHLIST or memo data.
+
+
+## Version 9 GitHub chart bootstrap
+
+If Live chart API is unavailable and no local chart cache exists, read and apply:
+
+```
+sites/SITES_V9_CHART_BOOTSTRAP_SPEC.md
+```
+
+GitHub chart snapshots contain public J-Quants OHLCV only. Never include WATCHLIST or personal data.
