@@ -146,3 +146,14 @@ sites/SITES_V6_429_COOLDOWN_SPEC.md
 ```
 
 Do not add aggressive retries for 429. Use single-flight requests and a 60-second circuit breaker.
+
+
+## Version 7 persistent last-known-good cache
+
+If Cloudflare/Render edge 429 persists even with Version 6 circuit breaker, read and apply:
+
+```
+sites/SITES_V7_PERSISTENT_CACHE_SPEC.md
+```
+
+Keep Version 6 network behavior unchanged. Version 7 is a display-resilience layer only.
