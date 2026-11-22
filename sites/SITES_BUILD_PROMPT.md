@@ -256,3 +256,14 @@ sites/SITES_V16_WATCHLIST_PROMOTION_HISTORY_SPEC.md
 ```
 
 Keep Version 15 promotion thresholds unchanged and keep normal Render request count at zero.
+
+
+## Version 17 TODAY priority engine
+
+After Version 16 adds WATCHLIST status history, improve TODAY ACTION QUEUE with explainable priority tiers and scoring:
+
+```
+sites/SITES_V17_TODAY_PRIORITY_SPEC.md
+```
+
+Do not change promotion or ENTRY CHECK thresholds. Keep normal Render request count at zero.
