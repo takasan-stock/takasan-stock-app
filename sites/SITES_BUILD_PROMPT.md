@@ -245,3 +245,14 @@ sites/SITES_V14_1_WATCH_CONTEXT_SPEC.md
 ```
 
 Use the full public watch-context Snapshot for promotion-board enrichment. Keep WATCHLIST membership and memo in Site DB only.
+
+
+## Version 16 WATCHLIST promotion history
+
+After Version 15 stabilizes Sites DB WATCHLIST + full watch-context, add persistent status-change history:
+
+```
+sites/SITES_V16_WATCHLIST_PROMOTION_HISTORY_SPEC.md
+```
+
+Keep Version 15 promotion thresholds unchanged and keep normal Render request count at zero.
