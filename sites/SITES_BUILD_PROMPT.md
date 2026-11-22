@@ -234,3 +234,14 @@ sites/SITES_V14_SITES_DB_WATCHLIST_SPEC.md
 ```
 
 Keep Snapshot as public-market source. Keep the Site private. Do not delete legacy Render/Sheets WATCHLIST data during migration.
+
+
+## Version 14.1 full WATCHLIST context
+
+If Version 14 DB migration succeeds but non-TOP20 WATCHLIST rows show データなし, read and apply:
+
+```
+sites/SITES_V14_1_WATCH_CONTEXT_SPEC.md
+```
+
+Use the full public watch-context Snapshot for promotion-board enrichment. Keep WATCHLIST membership and memo in Site DB only.
