@@ -223,3 +223,14 @@ sites/SITES_V13_NO_HEALTH_PREFLIGHT_SPEC.md
 ```
 
 Normal user operations should call the target endpoint directly and use /api/health for diagnostics only.
+
+
+## Version 14 Site Database WATCHLIST
+
+After Version 13 confirms Render edge 429 still blocks the single WATCHLIST request, move private WATCHLIST state to the Site's built-in database:
+
+```
+sites/SITES_V14_SITES_DB_WATCHLIST_SPEC.md
+```
+
+Keep Snapshot as public-market source. Keep the Site private. Do not delete legacy Render/Sheets WATCHLIST data during migration.
