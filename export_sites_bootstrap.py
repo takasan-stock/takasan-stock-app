@@ -148,6 +148,45 @@ def _export_charts(summary_df: pd.DataFrame, early_df: pd.DataFrame, generated_a
     return success
 
 
+
+WATCH_CONTEXT_COLUMNS = [
+    "Ticker",
+    "初動優先スコア",
+    "初動ランク",
+    "長期ステージ",
+    "RR目安",
+    "実戦想定損切り距離%",
+    "反転確認",
+    "反転定着",
+    "EARLY形状判定",
+    "急落判定",
+    "追撃余地",
+    "初動鮮度週",
+    "20週MA再奪回から週数",
+    "40週MA再奪回から週数",
+]
+
+
+def _watch_context_rows(weekly_df: pd.DataFrame) -> list[dict]:
+    if weekly_df is None or weekly_df.empty or "Ticker" not in weekly_df.columns:
+        return []
+
+    work = weekly_df.loc[:, ~weekly_df.columns.duplicated(keep="first")].copy()
+    available = [c for c in WATCH_CONTEXT_COLUMNS if c in work.columns]
+    work = work[available].copy()
+
+    work["Ticker"] = work["Ticker"].astype(str).str.strip()
+    work = work[work["Ticker"].ne("")]
+
+    if "初動優先スコア" in work.columns:
+        work["_sort_score"] = pd.to_numeric(work["初動優先スコア"], errors="coerce")
+        work = work.sort_values("_sort_score", ascending=False, na_position="last")
+        work = work.drop(columns=["_sort_score"])
+
+    work = work.drop_duplicates("Ticker", keep="first")
+    return _records(work)
+
+
 def main():
     gc, spreadsheet_id = _client()
     summary_df = _sheet(gc, spreadsheet_id, "4系統サマリー")
@@ -160,10 +199,12 @@ def main():
     generated_at = datetime.now(ZoneInfo("Asia/Tokyo")).isoformat(timespec="seconds")
     summary_rows = _records(summary_df)
     early_rows = _records(early_df)
+    watch_context_rows = _watch_context_rows(weekly_df)
     chart_count = _export_charts(summary_df, early_df, generated_at)
 
     _write("summary.json", {"rows": summary_rows})
     _write("early.json", {"rows": early_rows})
+    _write("watch-context.json", {"rows": watch_context_rows})
     _write(
         "meta.json",
         {
@@ -172,6 +213,7 @@ def main():
             "source": "Google Sheets via GitHub Actions",
             "summary_count": len(summary_rows),
             "early_count": len(early_rows),
+            "watch_context_count": len(watch_context_rows),
             "watchlist_included": False,
             "chart_included": chart_count > 0,
             "chart_count": chart_count,
