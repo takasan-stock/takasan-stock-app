@@ -267,3 +267,14 @@ sites/SITES_V17_TODAY_PRIORITY_SPEC.md
 ```
 
 Do not change promotion or ENTRY CHECK thresholds. Keep normal Render request count at zero.
+
+
+## Version 18 morning operations mode
+
+After Version 17 stabilizes TODAY priority ordering, turn TODAY into a morning operating workflow:
+
+```
+sites/SITES_V18_MORNING_OPS_SPEC.md
+```
+
+Keep Version 17 tier/score logic unchanged. Add Site DB-backed morning review state and action bands only.
