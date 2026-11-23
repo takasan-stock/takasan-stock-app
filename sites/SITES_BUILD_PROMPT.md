@@ -278,3 +278,14 @@ sites/SITES_V18_MORNING_OPS_SPEC.md
 ```
 
 Keep Version 17 tier/score logic unchanged. Add Site DB-backed morning review state and action bands only.
+
+
+## Version 19 promotion + morning notification center
+
+After Version 18 creates stable action bands and morning review state, add persistent in-Site notifications:
+
+```
+sites/SITES_V19_NOTIFICATION_CENTER_SPEC.md
+```
+
+Notify only meaningful promotions and one morning summary per market_date. Keep Render request count at zero.
