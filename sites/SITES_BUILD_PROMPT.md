@@ -289,3 +289,14 @@ sites/SITES_V19_NOTIFICATION_CENTER_SPEC.md
 ```
 
 Notify only meaningful promotions and one morning summary per market_date. Keep Render request count at zero.
+
+
+## Version 20 external notifications
+
+After Version 19 stabilizes internal notification events, deliver them externally with linked ChatGPT Site Automations:
+
+```
+sites/SITES_V20_EXTERNAL_NOTIFICATIONS_SPEC.md
+```
+
+Use ChatGPT task Push/Email notifications, Site DB, and GitHub Snapshot. Do not add third-party email secrets or Render dependencies.
