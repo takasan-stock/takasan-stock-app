@@ -2,14 +2,6 @@
   "ticker": "3635.T",
   "rows": [
     {
-      "Date": "2025-10-27",
-      "Open": 2121.0,
-      "High": 2134.5,
-      "Low": 2090.0,
-      "Close": 2094.0,
-      "Volume": 1545000.0
-    },
-    {
       "Date": "2025-10-28",
       "Open": 2082.0,
       "High": 2109.0,
@@ -2080,11 +2072,19 @@
       "Low": 1939.0,
       "Close": 1973.5,
       "Volume": 1260000.0
+    },
+    {
+      "Date": "2026-11-24",
+      "Open": 1976.5,
+      "High": 2006.5,
+      "Low": 1931.0,
+      "Close": 1937.5,
+      "Volume": 1386700.0
     }
   ],
   "source": "J-Quants",
   "primary_source": "J-Quants",
   "fallback_used": false,
   "fallback_reason": null,
-  "generated_at": "2026-11-24T10:12:07+09:00"
+  "generated_at": "2026-11-25T05:02:48+09:00"
 }

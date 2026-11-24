@@ -1800,11 +1800,19 @@
       "Low": 1681.5,
       "Close": 1711.5,
       "Volume": 6702800.0
+    },
+    {
+      "Date": "2026-11-24",
+      "Open": 1720.0,
+      "High": 1740.0,
+      "Low": 1675.0,
+      "Close": 1708.0,
+      "Volume": 5205500.0
     }
   ],
   "source": "J-Quants",
   "primary_source": "J-Quants",
   "fallback_used": false,
   "fallback_reason": null,
-  "generated_at": "2026-11-24T10:12:07+09:00"
+  "generated_at": "2026-11-25T05:02:48+09:00"
 }
