@@ -300,3 +300,16 @@ sites/SITES_V20_EXTERNAL_NOTIFICATIONS_SPEC.md
 ```
 
 Use ChatGPT task Push/Email notifications, Site DB, and GitHub Snapshot. Do not add third-party email secrets or Render dependencies.
+
+
+## Version 20.1 external automation registry fix
+
+Version 20 production testing showed that Site-created scheduled tasks can have blank internal titles and that MORNING/PROMOTION need separate explicit automation identities.
+
+Apply:
+
+```
+sites/SITES_V20_1_AUTOMATION_REGISTRY_FIX_SPEC.md
+```
+
+Register the owner-approved Site-created task IDs explicitly, revoke the old paused IDs, remove title-based identity resolution, and keep schedules at weekdays 05:30 / 19:00 JST.
