@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-11-26T07:44:00+09:00",
+  "generated_at": "2026-11-27T03:56:44+09:00",
   "source": "Google Sheets via GitHub Actions",
-  "summary_count": 259,
+  "summary_count": 238,
   "early_count": 11,
-  "watch_context_count": 503,
+  "watch_context_count": 490,
   "watchlist_included": false,
   "chart_included": true,
-  "chart_count": 262
+  "chart_count": 243
 }
